@@ -141,7 +141,7 @@ function createEditButtons(itemId) {
     const row2 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId(`edit_cancel_${itemId}`)
-            .setLabel('❌ Cancelar Edición')
+            .setLabel('✘ Cancelar Edición')
             .setStyle(ButtonStyle.Danger)
     );
 
@@ -233,7 +233,7 @@ client.on('interactionCreate', async interaction => {
         // 2a. CANCELAR EDICIÓN (NUEVO)
         if (campo === 'cancel') {
             await interaction.update({ 
-                content: `❌ Edición de **${item.nombre}** cancelada por el Staff.`,
+                content: `❌ Edición de **${item.nombre}** cancelada.`,
                 embeds: [],
                 components: []
             });
@@ -285,7 +285,7 @@ client.on('messageCreate', async message => {
         // **NUEVO: LÓGICA DE CANCELACIÓN POR MENSAJE**
         if (nuevoValor.toLowerCase() === CANCEL_EDIT_WORD) {
             delete edicionActiva[userId]; // Limpia el estado
-            return message.reply(`❌ Proceso de edición de **${item ? item.nombre : 'item'}** cancelado por el Staff.`);
+            return message.reply(`❌ Proceso de edición de **${item ? item.nombre : 'item'}** cancelado.`);
         }
         
         // Verificación de Staff (seguridad)
