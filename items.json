@@ -1,0 +1,11 @@
+{
+    "rupia_verde": {
+        "nombre": "Rupia Verde",
+        "descripcion": "Una rupia verde, equivalente a 1 rupia. Se encuentran por todos los rincones de Hyrule, normalmente escondidas en césped alto, vasijas o hasta cofres pequeños.",
+        "tipo": "moneda",
+        "disponible": true,
+        "imagen": "https://static.wikia.nocookie.net/zelda_gamepedia_en/images/1/19/TWW_Green_Rupee_Artwork.png/revision/latest/scale-to-width-down/250?cb=20130908173741",
+        "registradoPor": "talefox_0520",
+        "fecha": "25/9/2025"
+    }
+}
