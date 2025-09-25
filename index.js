@@ -62,6 +62,7 @@ function guardarCompendio() {
 
 // Crea los botones de paginación (Texto ELIMINADO)
 function createPaginationRow(currentPage, totalPages) {
+    // NOTA: Esta función DEBE devolver UN SOLO ActionRowBuilder.
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId('first')
@@ -137,11 +138,11 @@ function createEditButtons(itemId) {
             .setStyle(ButtonStyle.Secondary)
     );
 
-    // Fila 2: Botón de Cancelación (NUEVO)
+    // Fila 2: Botón de Cancelación 
     const row2 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId(`edit_cancel_${itemId}`)
-            .setLabel('✘ Cancelar Edición')
+            .setLabel('Cancelar Edición')
             .setStyle(ButtonStyle.Danger)
     );
 
@@ -177,7 +178,7 @@ client.on('ready', () => {
 client.on('interactionCreate', async interaction => {
     // 1. Lógica de Paginación (Botones first, prev, next, last)
     if (interaction.isButton() && ['first', 'prev', 'next', 'last'].includes(interaction.customId)) {
-        // ... (Lógica de paginación existente, sin cambios aquí)
+        // ... (Lógica de paginación existente)
         const footerText = interaction.message.embeds[0].footer.text;
         const match = footerText.match(/Página (\d+) de (\d+)/);
         
@@ -210,7 +211,8 @@ client.on('interactionCreate', async interaction => {
         const { embed: newEmbed } = createItemEmbedPage(items, newPage);
         const newRow = createPaginationRow(newPage, totalPages);
         
-        await interaction.update({ embeds: [newEmbed], components: newRow }); // Usamos newRow sin corchetes porque createPaginationRow devuelve una ActionRowBuilder
+        // CORRECCIÓN: Pasamos el ActionRowBuilder dentro de un array
+        await interaction.update({ embeds: [newEmbed], components: [newRow] }); 
         return; 
     }
     
@@ -223,17 +225,18 @@ client.on('interactionCreate', async interaction => {
         
         const parts = interaction.customId.split('_');
         const campo = parts[1];
-        const itemId = parts[2];
+        const itemId = parts[2]; // Capturamos el ID del item
         const item = compendio[itemId];
         
+        // CORRECCIÓN: Verificamos si el item existe ANTES de hacer el deferReply.
         if (!item) {
-            return interaction.reply({ content: 'El objeto que intentas editar ya no existe.', ephemeral: true });
+            return interaction.reply({ content: 'El objeto que intentas editar ya no existe o el ID es incorrecto.', ephemeral: true });
         }
 
         // 2a. CANCELAR EDICIÓN (NUEVO)
         if (campo === 'cancel') {
             await interaction.update({ 
-                content: `❌ Edición de **${item.nombre}** cancelada.`,
+                content: `❌ Edición de **${item.nombre}** cancelada por el Staff.`,
                 embeds: [],
                 components: []
             });
@@ -262,11 +265,11 @@ client.on('interactionCreate', async interaction => {
         // 2d. Enviar el prompt al usuario
         await interaction.followUp({ 
             content: prompt, 
-            ephemeral: true // Solo el usuario que interactúa lo ve
+            ephemeral: true 
         });
         
         // Opcional: Eliminar los botones del mensaje original para evitar clics dobles
-        await interaction.message.edit({ components: [] });
+        // Dejamos el mensaje como estaba para no confundir al resto.
     }
 });
 
@@ -282,10 +285,10 @@ client.on('messageCreate', async message => {
         const item = compendio[itemId];
         const nuevoValor = message.content.trim();
 
-        // **NUEVO: LÓGICA DE CANCELACIÓN POR MENSAJE**
+        // **LÓGICA DE CANCELACIÓN POR MENSAJE**
         if (nuevoValor.toLowerCase() === CANCEL_EDIT_WORD) {
             delete edicionActiva[userId]; // Limpia el estado
-            return message.reply(`❌ Proceso de edición de **${item ? item.nombre : 'item'}** cancelado.`);
+            return message.reply(`❌ Proceso de edición de **${item ? item.nombre : 'item'}** cancelado por el Staff.`);
         }
         
         // Verificación de Staff (seguridad)
@@ -351,7 +354,42 @@ client.on('messageCreate', async message => {
     
     const hasAdminPerms = message.member.roles.cache.has(ADMIN_ROLE_ID) || message.member.permissions.has(PermissionsBitField.Flags.Administrator);
 
-
+    
+    // --- NUEVO COMANDO: HELP ---
+    if (command === '-help') {
+        const helpEmbed = new EmbedBuilder()
+            .setColor('#0099ff')
+            .setTitle('📖 Guía de Comandos del Zelda BOT')
+            .setDescription('Aquí puedes consultar todos los comandos disponibles, diferenciando por el nivel de acceso.')
+            .addFields(
+                // Sección de Comandos de Staff
+                {
+                    name: '🛠️ Comandos de Administración (Solo Staff)',
+                    value: [
+                        `\`!Zcrearitem "Nombre" "Desc" "Tipo" "URL"\`: Registra un nuevo objeto en el compendio.`,
+                        `\`!Zeliminaritem "Nombre"\`: Borra un objeto del compendio permanentemente.`,
+                        `\`!Zeditaritem "Nombre"\`: Inicia el menú interactivo para modificar los datos (nombre, tipo, etc.) de un objeto existente.`,
+                        `*Comandos de edición en curso pueden cancelarse escribiendo \`${CANCEL_EDIT_WORD}\`*`
+                    ].join('\n'),
+                    inline: false
+                },
+                
+                // Sección de Comandos Públicos (Para futuros comandos de roleplay)
+                {
+                    name: '🌎 Comandos de Consulta (Público)',
+                    value: [
+                        `\`!Zlistaritems\`: Muestra el compendio completo en una lista paginada.`,
+                        `\`!Zveritem "Nombre"\`: Muestra la ficha detallada de un objeto específico.`,
+                        `\`!Z-help\`: Muestra esta guía de comandos.`
+                    ].join('\n'),
+                    inline: false
+                }
+            )
+            .setFooter({ text: 'Desarrollado para el Rol de Nuevo Hyrule | Prefijo: !Z' });
+        
+        return message.channel.send({ embeds: [helpEmbed] });
+    }
+    
     // --- Comando: CREAR ITEM (Mantenido)
     if (command === 'crearitem') {
         if (!hasAdminPerms) {
@@ -439,7 +477,7 @@ client.on('messageCreate', async message => {
         message.channel.send({ embeds: [embed] });
     }
 
-    // --- Comando: EDITAR ITEM (Mantenido)
+    // --- Comando: EDITAR ITEM (CORRECCIÓN en components)
     if (command === 'editaritem') {
         if (!hasAdminPerms) {
             return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden editar objetos.');
@@ -464,6 +502,7 @@ client.on('messageCreate', async message => {
         const embed = createEditSelectionEmbed(item);
         const rows = createEditButtons(itemId); // Retorna [row1, row2]
         
+        // CORRECCIÓN CLAVE: Pasamos el array de filas de botones (rows)
         message.channel.send({ embeds: [embed], components: rows });
     }
 
