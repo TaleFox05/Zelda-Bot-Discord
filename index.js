@@ -18,7 +18,8 @@ const LIST_EMBED_COLOR = '#427522';
 // ID del rol de Administrador que puede usar los comandos de Staff
 const ADMIN_ROLE_ID = "1420026299090731050"; 
 
-// Tipos de Objeto válidos para validación en !Zcrearitem
+// Palabras clave para la gestión
+const CANCEL_EDIT_WORD = '!cancelar'; 
 const TIPOS_VALIDOS = ['moneda', 'objeto', 'keyitem']; 
 
 // Almacén temporal para la edición. Guarda el ID del usuario y el ID del objeto que está editando.
@@ -64,22 +65,22 @@ function createPaginationRow(currentPage, totalPages) {
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId('first')
-            .setEmoji('⏮️') // Solo Emoji
+            .setEmoji('⏮️') 
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(currentPage === 0),
         new ButtonBuilder()
             .setCustomId('prev')
-            .setEmoji('◀️') // Solo Emoji
+            .setEmoji('◀️') 
             .setStyle(ButtonStyle.Primary)
             .setDisabled(currentPage === 0),
         new ButtonBuilder()
             .setCustomId('next')
-            .setEmoji('▶️') // Solo Emoji
+            .setEmoji('▶️') 
             .setStyle(ButtonStyle.Primary)
             .setDisabled(currentPage === totalPages - 1),
         new ButtonBuilder()
             .setCustomId('last')
-            .setEmoji('⏭️') // Solo Emoji
+            .setEmoji('⏭️') 
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(currentPage === totalPages - 1)
     );
@@ -116,7 +117,8 @@ function createItemEmbedPage(items, pageIndex) {
 
 // Crea los botones para seleccionar qué campo editar
 function createEditButtons(itemId) {
-    return new ActionRowBuilder().addComponents(
+    // Fila 1: Opciones de Edición
+    const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId(`edit_nombre_${itemId}`)
             .setLabel('✏️ Nombre')
@@ -134,6 +136,16 @@ function createEditButtons(itemId) {
             .setLabel('🖼️ Imagen URL')
             .setStyle(ButtonStyle.Secondary)
     );
+
+    // Fila 2: Botón de Cancelación (NUEVO)
+    const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`edit_cancel_${itemId}`)
+            .setLabel('❌ Cancelar Edición')
+            .setStyle(ButtonStyle.Danger)
+    );
+
+    return [row1, row2]; // Devuelve ambas filas
 }
 
 // Genera el embed de confirmación y selección de campo
@@ -141,7 +153,7 @@ function createEditSelectionEmbed(item) {
     return new EmbedBuilder()
         .setColor(LIST_EMBED_COLOR)
         .setTitle(`🛠️ Editando: ${item.nombre}`)
-        .setDescription(`Selecciona qué campo deseas modificar para el objeto **${item.nombre}**.\n\n*Elige uno de los botones de abajo.*`)
+        .setDescription(`Selecciona qué campo deseas modificar para el objeto **${item.nombre}**.\n\n*Elige uno de los botones de abajo o **Cancelar Edición**.*`)
         .addFields(
             { name: 'Descripción Actual', value: item.descripcion.substring(0, 100) + (item.descripcion.length > 100 ? '...' : ''), inline: false },
             { name: 'Tipo Actual', value: item.tipo.toUpperCase(), inline: true },
@@ -165,7 +177,7 @@ client.on('ready', () => {
 client.on('interactionCreate', async interaction => {
     // 1. Lógica de Paginación (Botones first, prev, next, last)
     if (interaction.isButton() && ['first', 'prev', 'next', 'last'].includes(interaction.customId)) {
-        // ... (Lógica de paginación existente, no modificada)
+        // ... (Lógica de paginación existente, sin cambios aquí)
         const footerText = interaction.message.embeds[0].footer.text;
         const match = footerText.match(/Página (\d+) de (\d+)/);
         
@@ -198,7 +210,7 @@ client.on('interactionCreate', async interaction => {
         const { embed: newEmbed } = createItemEmbedPage(items, newPage);
         const newRow = createPaginationRow(newPage, totalPages);
         
-        await interaction.update({ embeds: [newEmbed], components: [newRow] });
+        await interaction.update({ embeds: [newEmbed], components: newRow }); // Usamos newRow sin corchetes porque createPaginationRow devuelve una ActionRowBuilder
         return; 
     }
     
@@ -209,36 +221,45 @@ client.on('interactionCreate', async interaction => {
             return interaction.reply({ content: '¡Solo los Administradores Canon pueden usar las herramientas de edición!', ephemeral: true });
         }
         
-        await interaction.deferReply({ ephemeral: true });
-        
-        // El customId viene como 'edit_campo_itemId'
         const parts = interaction.customId.split('_');
         const campo = parts[1];
         const itemId = parts[2];
         const item = compendio[itemId];
         
         if (!item) {
-            return interaction.followUp({ content: 'El objeto que intentas editar ya no existe.', ephemeral: true });
+            return interaction.reply({ content: 'El objeto que intentas editar ya no existe.', ephemeral: true });
         }
 
-        // 2a. Validar Tipo si se selecciona Tipo
+        // 2a. CANCELAR EDICIÓN (NUEVO)
+        if (campo === 'cancel') {
+            await interaction.update({ 
+                content: `❌ Edición de **${item.nombre}** cancelada por el Staff.`,
+                embeds: [],
+                components: []
+            });
+            return;
+        }
+
+        // 2b. LÓGICA PARA SELECCIÓN DE CAMPO
+        await interaction.deferReply({ ephemeral: true });
+        
         let prompt;
         if (campo === 'tipo') {
-            prompt = `Has elegido editar el **TIPO**.\n\n**Escribe el nuevo valor:**\nDebe ser uno de estos: \`${TIPOS_VALIDOS.join(', ')}\``;
+            prompt = `Has elegido editar el **TIPO**.\n\n**Escribe el nuevo valor:**\nDebe ser uno de estos: \`${TIPOS_VALIDOS.join(', ')}\`\n\n*Para cancelar, escribe \`${CANCEL_EDIT_WORD}\`.*`;
         } else if (campo === 'imagen') {
-             prompt = `Has elegido editar la **IMAGEN URL**.\n\n**Escribe la nueva URL** (debe empezar por http/https):`;
+             prompt = `Has elegido editar la **IMAGEN URL**.\n\n**Escribe la nueva URL** (debe empezar por http/https):\n\n*Para cancelar, escribe \`${CANCEL_EDIT_WORD}\`.*`;
         } else {
-            prompt = `Has elegido editar el **${campo.toUpperCase()}**.\n\n**Escribe el nuevo valor:**`;
+            prompt = `Has elegido editar el **${campo.toUpperCase()}**.\n\n**Escribe el nuevo valor:**\n\n*Para cancelar, escribe \`${CANCEL_EDIT_WORD}\`.*`;
         }
         
-        // 2b. Almacenar el estado de edición del usuario
+        // 2c. Almacenar el estado de edición del usuario
         edicionActiva[interaction.user.id] = { 
             itemId: itemId, 
             campo: campo,
             channelId: interaction.channelId
         };
 
-        // 2c. Enviar el prompt al usuario
+        // 2d. Enviar el prompt al usuario
         await interaction.followUp({ 
             content: prompt, 
             ephemeral: true // Solo el usuario que interactúa lo ve
@@ -256,17 +277,23 @@ client.on('messageCreate', async message => {
     // 1. Lógica de Respuesta de Edición (Debe ir antes de la lógica de comandos)
     const userId = message.author.id;
     if (edicionActiva[userId] && edicionActiva[userId].channelId === message.channelId) {
+        
+        const { itemId, campo } = edicionActiva[userId];
+        const item = compendio[itemId];
+        const nuevoValor = message.content.trim();
+
+        // **NUEVO: LÓGICA DE CANCELACIÓN POR MENSAJE**
+        if (nuevoValor.toLowerCase() === CANCEL_EDIT_WORD) {
+            delete edicionActiva[userId]; // Limpia el estado
+            return message.reply(`❌ Proceso de edición de **${item ? item.nombre : 'item'}** cancelado por el Staff.`);
+        }
+        
         // Verificación de Staff (seguridad)
         if (!message.member.roles.cache.has(ADMIN_ROLE_ID) && !message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-            // No debería pasar si el botón funcionó, pero es un buen control
             delete edicionActiva[userId];
             return message.reply({ content: 'No tienes permiso para responder a esta solicitud de edición.', ephemeral: true });
         }
         
-        const { itemId, campo } = edicionActiva[userId];
-        const item = compendio[itemId];
-        const nuevoValor = message.content;
-
         if (!item) {
             delete edicionActiva[userId];
             return message.reply(`Error: El objeto con ID ${itemId} ya no existe.`);
@@ -278,22 +305,18 @@ client.on('messageCreate', async message => {
         }
         
         // 1a. Si el nombre se cambia, la clave del objeto debe cambiar (ID)
+        let nombreItemOriginal = item.nombre;
         let nuevoItemId = itemId;
+
         if (campo === 'nombre') {
             nuevoItemId = nuevoValor.toLowerCase().replace(/ /g, '_');
             
-            // Revisa si ya existe un objeto con el nuevo nombre
             if (compendio[nuevoItemId] && nuevoItemId !== itemId) {
                 return message.reply(`⚠️ **Nombre Existente:** Ya hay un objeto con el nombre **${nuevoValor}**. Usa un nombre diferente.`);
             }
             
-            // Guarda el nuevo nombre en el objeto antiguo
             item.nombre = nuevoValor;
-            
-            // Crea una copia del objeto bajo el nuevo ID
             compendio[nuevoItemId] = { ...item };
-            
-            // Elimina el objeto con el ID antiguo
             delete compendio[itemId];
             
         } else {
@@ -313,7 +336,9 @@ client.on('messageCreate', async message => {
             )
             .setThumbnail(item.imagen);
         
-        return message.reply({ embeds: [confirmEmbed] });
+        message.reply({ embeds: [confirmEmbed] });
+        
+        return; // Sale del evento messageCreate
     }
     
     // 2. Lógica de Comandos (Comandos que inician con !Z)
@@ -332,7 +357,7 @@ client.on('messageCreate', async message => {
         if (!hasAdminPerms) {
             return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden registrar objetos mágicos.');
         }
-        // ... (Lógica de crearitem)
+        
         const regex = /"([^"]+)"/g;
         const matches = [...message.content.matchAll(regex)];
 
@@ -382,7 +407,7 @@ client.on('messageCreate', async message => {
         message.channel.send({ embeds: [embed] });
     }
     
-    // --- Comando: ELIMINAR ITEM (NUEVO)
+    // --- Comando: ELIMINAR ITEM (Mantenido)
     if (command === 'eliminaritem') {
         if (!hasAdminPerms) {
             return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden eliminar objetos.');
@@ -407,14 +432,14 @@ client.on('messageCreate', async message => {
         guardarCompendio();
 
         const embed = new EmbedBuilder()
-            .setColor('#cc0000') // Rojo para eliminación
+            .setColor('#cc0000') 
             .setTitle(`🗑️ Objeto Eliminado: ${itemEliminado.nombre}`)
             .setDescription(`El objeto **${itemEliminado.nombre}** ha sido borrado permanentemente del Compendio de Nuevo Hyrule.`);
         
         message.channel.send({ embeds: [embed] });
     }
 
-    // --- Comando: EDITAR ITEM (NUEVO - INICIO DE INTERACCIÓN)
+    // --- Comando: EDITAR ITEM (Mantenido)
     if (command === 'editaritem') {
         if (!hasAdminPerms) {
             return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden editar objetos.');
@@ -437,9 +462,9 @@ client.on('messageCreate', async message => {
         
         // Iniciar el proceso de edición con el embed y los botones
         const embed = createEditSelectionEmbed(item);
-        const row = createEditButtons(itemId); 
+        const rows = createEditButtons(itemId); // Retorna [row1, row2]
         
-        message.channel.send({ embeds: [embed], components: [row] });
+        message.channel.send({ embeds: [embed], components: rows });
     }
 
     // --- Comando: VER OBJETO INDIVIDUAL (Mantenido)

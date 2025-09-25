@@ -7,5 +7,14 @@
         "imagen": "https://static.wikia.nocookie.net/zelda_gamepedia_en/images/1/19/TWW_Green_Rupee_Artwork.png/revision/latest/scale-to-width-down/250?cb=20130908173741",
         "registradoPor": "talefox_0520",
         "fecha": "25/9/2025"
+    },
+    "prueba": {
+        "nombre": "Prueba",
+        "descripcion": "Esto es una prueba",
+        "tipo": "objeto",
+        "disponible": true,
+        "imagen": "https://www.vhv.rs/dpng/d/313-3135230_zelda-icon-png-transparent-png.png",
+        "registradoPor": "talefox_0520",
+        "fecha": "25/9/2025"
     }
 }
