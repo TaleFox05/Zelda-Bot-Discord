@@ -95,12 +95,10 @@ function guardarEnemigosBase() {
 
 
 // =========================================================================
-// === LÓGICA DE PAGINACIÓN / EDICIÓN (SIN CAMBIOS) ===
+// === LÓGICA DE PAGINACIÓN / EDICIÓN ===
 // =========================================================================
 
-// Crea los botones de paginación (Texto ELIMINADO)
 function createPaginationRow(currentPage, totalPages) {
-    // NOTA: Esta función DEBE devolver UN SOLO ActionRowBuilder.
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId('first')
@@ -125,7 +123,6 @@ function createPaginationRow(currentPage, totalPages) {
     );
 }
 
-// Genera el embed para una página específica (SIN CAMBIOS)
 function createItemEmbedPage(items, pageIndex) {
     const ITEMS_PER_PAGE = 5;
     const start = pageIndex * ITEMS_PER_PAGE;
@@ -150,7 +147,6 @@ function createItemEmbedPage(items, pageIndex) {
     return { embed, totalPages };
 }
 
-// Crea los botones para seleccionar qué campo editar
 function createEditButtons(itemId) {
     const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -179,7 +175,6 @@ function createEditButtons(itemId) {
     return [row1, row2]; 
 }
 
-// Genera el embed de confirmación y selección de campo
 function createEditSelectionEmbed(item) {
     return new EmbedBuilder()
         .setColor(LIST_EMBED_COLOR)
@@ -205,9 +200,8 @@ client.on('ready', () => {
     client.user.setActivity('Registra los objetos del reino');
 });
 
-// Listener para interacciones: Paginación y Edición
 client.on('interactionCreate', async interaction => {
-    // 1. Lógica de Paginación (Mantenido)
+    // 1. Lógica de Paginación 
     if (interaction.isButton() && ['first', 'prev', 'next', 'last'].includes(interaction.customId)) {
         const footerText = interaction.message.embeds[0].footer.text;
         const match = footerText.match(/Página (\d+) de (\d+)/);
@@ -230,7 +224,7 @@ client.on('interactionCreate', async interaction => {
         return; 
     }
     
-    // 2. Lógica de Edición (Mantenido)
+    // 2. Lógica de Edición 
     if (interaction.isButton() && interaction.customId.startsWith('edit_')) {
         if (!interaction.member.roles.cache.has(ADMIN_ROLE_ID) && !interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
             return interaction.reply({ content: '¡Solo los Administradores Canon pueden usar las herramientas de edición!', ephemeral: true });
@@ -278,11 +272,10 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
-// Listener para Mensajes (Comandos y Respuestas de Edición)
 client.on('messageCreate', async message => {
     if (message.author.bot) return; 
 
-    // 1. Lógica de Respuesta de Edición (Mantenido)
+    // 1. Lógica de Respuesta de Edición 
     const userId = message.author.id;
     if (edicionActiva[userId] && edicionActiva[userId].channelId === message.channelId) {
         
@@ -342,7 +335,7 @@ client.on('messageCreate', async message => {
         return;
     }
     
-    // 2. Lógica de Comandos (Comandos que inician con !Z)
+    // 2. Lógica de Comandos 
     const prefix = '!Z'; 
     if (!message.content.startsWith(prefix)) return;
 
@@ -353,7 +346,7 @@ client.on('messageCreate', async message => {
     const hasAdminPerms = message.member.roles.cache.has(ADMIN_ROLE_ID) || message.member.permissions.has(PermissionsBitField.Flags.Administrator);
 
     
-    // --- COMANDO: HELP --- (Actualizado con nuevos comandos)
+    // --- COMANDO: HELP ---
     if (command === '-help') {
         const helpEmbed = new EmbedBuilder()
             .setColor('#0099ff')
@@ -367,16 +360,16 @@ client.on('messageCreate', async message => {
                         `\`!Zcrearitem "Nombre" "Desc" "Tipo" "URL"\`: Registra un nuevo objeto en el compendio.`,
                         `\`!Zeliminaritem "Nombre"\`: Borra un objeto del compendio permanentemente.`,
                         `\`!Zeditaritem "Nombre"\`: Inicia el menú interactivo para modificar los datos de un objeto.`,
-                        `\n**— Gestión de Encuentros (NUEVO) —**`,
+                        `\n**— Gestión de Encuentros —**`,
                         `\`!Zcrearenemigo "Nombre" "HP" "URL" ["Mensaje"]\`: Registra un enemigo base.`,
-                        `\`!Zspawn "CanalID" "EnemigoNombre" [Cantidad]\`: Hace aparecer uno o varios enemigos en un canal.`,
-                        `\`!Zcrearcofre "CanalID" "Tipo" "ItemNombre"\`: Crea un cofre con un item en un canal.`,
+                        `\`!Zspawn <CanalID> "EnemigoNombre" [Cantidad]\`: Hace aparecer uno o varios enemigos en un canal.`,
+                        `\`!Zcrearcofre <CanalID> "Tipo" "ItemNombre"\`: Crea un cofre con un item en un canal.`,
                         `*Comandos de edición en curso pueden cancelarse escribiendo \`${CANCEL_EDIT_WORD}\`*`
                     ].join('\n'),
                     inline: false
                 },
                 
-                // Sección de Comandos Públicos (Mantenido)
+                // Sección de Comandos Públicos 
                 {
                     name: '🌎 Comandos de Consulta (Público)',
                     value: [
@@ -392,13 +385,12 @@ client.on('messageCreate', async message => {
         return message.channel.send({ embeds: [helpEmbed] });
     }
     
-    // --- NUEVO COMANDO: CREAR ENEMIGO (Staff) ---
+    // --- COMANDO: CREAR ENEMIGO (Staff) ---
     if (command === 'crearenemigo') {
         if (!hasAdminPerms) {
             return message.reply('¡Solo los Administradores Canon pueden registrar enemigos!');
         }
         
-        // Expresión regular para capturar hasta 4 argumentos entre comillas (el 4to es opcional)
         const regex = /"([^"]+)"/g;
         const matches = [...message.content.matchAll(regex)];
 
@@ -409,7 +401,6 @@ client.on('messageCreate', async message => {
         const nombre = matches[0][1];
         const hp = parseInt(matches[1][1]);
         const imagenUrl = matches[2][1];
-        // El cuarto match es opcional
         const mensajeAparicion = matches.length > 3 ? matches[3][1] : `¡Un **${nombre}** ha aparecido de repente!`;
         
         if (isNaN(hp) || hp <= 0) {
@@ -426,7 +417,7 @@ client.on('messageCreate', async message => {
             nombre: nombre,
             hp: hp,
             imagen: imagenUrl,
-            mensajeAparicion: mensajeAparicion, // Nuevo campo
+            mensajeAparicion: mensajeAparicion, 
             registradoPor: message.author.tag
         };
         
@@ -445,14 +436,13 @@ client.on('messageCreate', async message => {
         message.channel.send({ embeds: [embed] });
     }
     
-    // --- NUEVO COMANDO: SPAWN ENEMIGO (Staff) ---
+    // --- COMANDO: SPAWN ENEMIGO (Staff) ---
     if (command === 'spawn') {
         if (!hasAdminPerms) {
             return message.reply('¡Solo los Administradores Canon pueden invocar monstruos!');
         }
         
         const partes = fullCommand.split(/\s+/);
-        // Esperamos: [spawn, CanalID, EnemigoNombre (con _ o comillas), Cantidad(opcional)]
         
         if (partes.length < 2) {
             return message.reply('Sintaxis incorrecta. Uso: `!Zspawn <CanalID> "Nombre Enemigo" [Cantidad (por defecto 1)]`');
@@ -460,14 +450,13 @@ client.on('messageCreate', async message => {
 
         const canalId = partes[1].replace(/<#|>/g, '');
         
-        // Usamos regex para capturar el nombre del enemigo entre comillas (si se usan)
         const nameMatch = fullCommand.match(/"([^"]+)"/);
         let nombreEnemigo;
         
         if (nameMatch) {
             nombreEnemigo = nameMatch[1];
         } else if (partes.length > 2) {
-            nombreEnemigo = partes[2]; // Asume que es el ID (sin espacios) si no hay comillas
+            nombreEnemigo = partes[2]; 
         } else {
              return message.reply('Sintaxis incorrecta. Debes especificar el nombre del enemigo.');
         }
@@ -480,7 +469,6 @@ client.on('messageCreate', async message => {
         }
 
         let cantidad = 1;
-        // Si hay comillas, la cantidad viene después, si no, viene como tercer argumento.
         if (nameMatch) {
             const lastPart = partes[partes.length - 1];
             if (!isNaN(parseInt(lastPart))) {
@@ -490,19 +478,17 @@ client.on('messageCreate', async message => {
             cantidad = parseInt(partes[3]);
         }
         
-        cantidad = Math.max(1, Math.min(10, cantidad)); // Limitar a 1-10 por seguridad
+        cantidad = Math.max(1, Math.min(10, cantidad)); 
 
-        // Buscar el canal
         const targetChannel = client.channels.cache.get(canalId);
         if (!targetChannel) {
             return message.reply('No se pudo encontrar ese Canal ID. Asegúrate de que el bot tenga acceso.');
         }
 
-        // Crear el embed de aparición
         const spawnEmbed = new EmbedBuilder()
             .setColor(ENEMY_EMBED_COLOR)
             .setTitle(`⚔️ ¡ALERTA! Enemigo a la vista: ${enemigoBase.nombre}!`)
-            .setDescription(enemigoBase.mensajeAparicion) // Mensaje personalizado o por defecto
+            .setDescription(enemigoBase.mensajeAparicion) 
             .addFields(
                 { name: 'HP', value: enemigoBase.hp.toString(), inline: true },
                 { name: 'Cantidad', value: cantidad.toString(), inline: true }
@@ -513,34 +499,35 @@ client.on('messageCreate', async message => {
         
         const sentMessage = await targetChannel.send({ embeds: [spawnEmbed] });
 
-        // Registrar el encuentro activo
         encuentrosActivos[canalId] = {
             enemigoId: enemigoId,
             cantidad: cantidad,
-            hpRestante: enemigoBase.hp * cantidad, // HP total del grupo
+            hpRestante: enemigoBase.hp * cantidad, 
             mensajeId: sentMessage.id
         };
 
         message.reply(`✅ **${cantidad}x ${enemigoBase.nombre}** invocado(s) en ${targetChannel}.`);
     }
 
-    // --- NUEVO COMANDO: CREAR COFRE (Staff) ---
+    // --- COMANDO: CREAR COFRE (Staff) ---
     if (command === 'crearcofre') {
         if (!hasAdminPerms) {
             return message.reply('¡Solo los Administradores Canon pueden crear cofres!');
         }
         
-        // Uso: !Zcrearcofre <CanalID> "Tipo (pequeño/grande/jefe)" "Nombre del Item"
+        // 1. Obtener la Canal ID del segundo argumento (args[1])
+        const canalId = args[1] ? args[1].replace(/<#|>/g, '') : null; // Limpiamos la mención si existe
+        
+        // 2. Obtener los argumentos entre comillas (Tipo y Nombre del Item)
         const regex = /"([^"]+)"/g;
         const matches = [...message.content.matchAll(regex)];
         
-        if (matches.length < 2) {
+        if (!canalId || matches.length < 2) {
             return message.reply('Sintaxis incorrecta. Uso: `!Zcrearcofre <CanalID> "Tipo (pequeño/grande/jefe)" "Nombre del Item"`');
         }
 
-        const canalId = args[1].replace(/<#|>/g, '');
-        const tipoCofre = matches[0][1].toLowerCase();
-        const nombreItem = matches[1][1];
+        const tipoCofre = matches[0][1].toLowerCase(); 
+        const nombreItem = matches[1][1];             
         const itemId = nombreItem.toLowerCase().replace(/ /g, '_');
 
         const cofre = CHEST_TYPES[tipoCofre];
@@ -555,7 +542,7 @@ client.on('messageCreate', async message => {
 
         const targetChannel = client.channels.cache.get(canalId);
         if (!targetChannel) {
-            return message.reply('No se pudo encontrar ese Canal ID. Asegúrate de que el bot tenga acceso.');
+            return message.reply('No se pudo encontrar ese Canal ID. Asegúrate de que el bot tenga acceso (Ver Canal y Enviar Mensajes).');
         }
 
         // Crear el embed del cofre
@@ -583,22 +570,165 @@ client.on('messageCreate', async message => {
         message.reply(`✅ **${cofre.nombre}** creado en ${targetChannel} con el item **${item.nombre}** dentro.`);
     }
 
-    
-    // --- Comandos de Compendio (Mantenido) ---
+    // --- Comando: CREAR ITEM (Mantenido)
     if (command === 'crearitem') {
-        // ... Lógica de crearitem
+        if (!hasAdminPerms) {
+            return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden registrar objetos mágicos.');
+        }
+        
+        const regex = /"([^"]+)"/g;
+        const matches = [...message.content.matchAll(regex)];
+
+        if (matches.length < 4) {
+            return message.reply('Sintaxis incorrecta. Uso: `!Zcrearitem "Nombre" "Descripción" "Tipo (moneda/objeto/keyitem)" "URL de Imagen"`');
+        }
+
+        const nombre = matches[0][1];
+        const descripcion = matches[1][1];
+        const tipo = matches[2][1].toLowerCase();
+        const imagenUrl = matches[3][1];
+        
+        if (!TIPOS_VALIDOS.includes(tipo)) {
+            return message.reply(`El tipo de objeto debe ser uno de estos: ${TIPOS_VALIDOS.join(', ')}.`);
+        }
+
+        const id = nombre.toLowerCase().replace(/ /g, '_');
+
+        if (compendio[id]) {
+            return message.reply(`¡El objeto **${nombre}** ya está registrado!`);
+        }
+
+        compendio[id] = {
+            nombre: nombre,
+            descripcion: descripcion,
+            tipo: tipo,
+            disponible: true, 
+            imagen: imagenUrl,
+            registradoPor: message.author.tag,
+            fecha: new Date().toLocaleDateString('es-ES')
+        };
+        
+        guardarCompendio();
+        
+        const embed = new EmbedBuilder()
+            .setColor(LIST_EMBED_COLOR) 
+            .setTitle(`✅ Objeto Registrado: ${nombre}`)
+            .setDescription(`Un nuevo artefacto ha sido añadido al Compendio de Hyrule.`)
+            .addFields(
+                { name: 'Descripción', value: descripcion, inline: false },
+                { name: 'Tipo', value: tipo.toUpperCase(), inline: true },
+                { name: 'Estado', value: 'Disponible', inline: true }
+            )
+            .setImage(imagenUrl)
+            .setFooter({ text: `Registrado por: ${message.author.tag}` });
+        
+        message.channel.send({ embeds: [embed] });
     }
+    
+    // --- Comando: ELIMINAR ITEM (Mantenido)
     if (command === 'eliminaritem') {
-        // ... Lógica de eliminaritem
+        if (!hasAdminPerms) {
+            return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden eliminar objetos.');
+        }
+        
+        const regex = /"([^"]+)"/; 
+        const match = fullCommand.match(regex);
+        
+        if (!match) {
+            return message.reply('Uso: `!Zeliminaritem "Nombre Completo del Objeto"`');
+        }
+        
+        const nombreItem = match[1]; 
+        const id = nombreItem.toLowerCase().replace(/ /g, '_');
+        
+        if (!compendio[id]) {
+            return message.reply(`No se encontró ningún objeto llamado **${nombreItem}** en el Compendio.`);
+        }
+        
+        const itemEliminado = compendio[id];
+        delete compendio[id];
+        guardarCompendio();
+
+        const embed = new EmbedBuilder()
+            .setColor('#cc0000') 
+            .setTitle(`🗑️ Objeto Eliminado: ${itemEliminado.nombre}`)
+            .setDescription(`El objeto **${itemEliminado.nombre}** ha sido borrado permanentemente del Compendio de Nuevo Hyrule.`);
+        
+        message.channel.send({ embeds: [embed] });
     }
+
+    // --- Comando: EDITAR ITEM (Mantenido)
     if (command === 'editaritem') {
-        // ... Lógica de editaritem
+        if (!hasAdminPerms) {
+            return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden editar objetos.');
+        }
+
+        const regex = /"([^"]+)"/; 
+        const match = fullCommand.match(regex);
+        
+        if (!match) {
+            return message.reply('Uso: `!Zeditaritem "Nombre Completo del Objeto"`');
+        }
+        
+        const nombreItem = match[1]; 
+        const itemId = nombreItem.toLowerCase().replace(/ /g, '_');
+        const item = compendio[itemId];
+
+        if (!item) {
+            return message.reply(`No se encontró ningún objeto llamado **${nombreItem}** para editar.`);
+        }
+        
+        const embed = createEditSelectionEmbed(item);
+        const rows = createEditButtons(itemId); 
+        
+        message.channel.send({ embeds: [embed], components: rows });
     }
+
+    // --- Comando: VER OBJETO INDIVIDUAL (Mantenido)
     if (command === 'veritem') { 
-        // ... Lógica de veritem
+        const regex = /"([^"]+)"/; 
+        const match = fullCommand.match(regex);
+        
+        if (!match) {
+            return message.reply('Uso: `!Zveritem "Nombre Completo del Objeto"`');
+        }
+        
+        const nombreItem = match[1]; 
+        const id = nombreItem.toLowerCase().replace(/ /g, '_');
+        const item = compendio[id];
+
+        if (!item) {
+            return message.reply(`No se encontró ningún objeto llamado **${nombreItem}** en el Compendio.`);
+        }
+
+        const embed = new EmbedBuilder()
+            .setColor(LIST_EMBED_COLOR) 
+            .setTitle(item.nombre) 
+            .addFields(
+                { name: 'Descripción', value: item.descripcion, inline: false },
+                { name: 'Tipo', value: item.tipo.toUpperCase(), inline: true },
+                { name: 'Estado', value: item.disponible ? 'Disponible' : 'En Posesión', inline: true },
+                { name: 'Fecha de Registro', value: item.fecha, inline: true }
+            )
+            .setImage(item.imagen)
+            .setFooter({ text: `Registrado por: ${item.registradoPor}` });
+        
+        message.channel.send({ embeds: [embed] });
     }
+    
+    // --- Comando: LISTAR OBJETOS (Mantenido)
     if (command === 'listaritems') {
-        // ... Lógica de listaritems
+        const items = Object.values(compendio);
+        
+        if (items.length === 0) {
+            return message.channel.send('***El Compendio de Objetos está vacío. ¡Que se registre el primer tesoro!***');
+        }
+
+        const currentPage = 0;
+        const { embed, totalPages } = createItemEmbedPage(items, currentPage);
+        const row = createPaginationRow(currentPage, totalPages);
+        
+        message.channel.send({ embeds: [embed], components: [row] });
     }
 });
 
