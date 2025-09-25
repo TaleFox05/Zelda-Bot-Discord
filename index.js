@@ -13,13 +13,16 @@ const path = require('path'); // Módulo para gestionar rutas de archivos
 // === CONFIGURACIÓN Y DEFINICIONES ===
 // =========================================================================
 
-// Color del embed de listado para uniformidad (¡COLOR CORREGIDO a #427522!)
+// Color del embed de listado para uniformidad
 const LIST_EMBED_COLOR = '#427522'; 
 // ID del rol de Administrador que puede usar los comandos de Staff
 const ADMIN_ROLE_ID = "1420026299090731050"; 
 
 // Tipos de Objeto válidos para validación en !Zcrearitem
 const TIPOS_VALIDOS = ['moneda', 'objeto', 'keyitem']; 
+
+// Almacén temporal para la edición. Guarda el ID del usuario y el ID del objeto que está editando.
+const edicionActiva = {};
 
 // Ruta y lectura del archivo de datos (Base de datos de Items)
 const DATA_FILE = path.resolve(__dirname, 'items.json');
@@ -38,7 +41,6 @@ const client = new Client({
 // === FUNCIONES DE DATOS ===
 // =========================================================================
 
-// Función para cargar los items al inicio del bot
 function cargarCompendio() {
     try {
         const data = fs.readFileSync(DATA_FILE, 'utf8');
@@ -49,7 +51,6 @@ function cargarCompendio() {
     }
 }
 
-// Función para guardar los datos en el archivo JSON
 function guardarCompendio() {
     fs.writeFileSync(DATA_FILE, JSON.stringify(compendio, null, 4));
 }
@@ -58,33 +59,33 @@ function guardarCompendio() {
 // === LÓGICA DE PAGINACIÓN ===
 // =========================================================================
 
-// Crea los botones de paginación
+// Crea los botones de paginación (Texto ELIMINADO)
 function createPaginationRow(currentPage, totalPages) {
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId('first')
-            .setLabel('⏮️ Primera')
+            .setEmoji('⏮️') // Solo Emoji
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(currentPage === 0),
         new ButtonBuilder()
             .setCustomId('prev')
-            .setLabel('◀️ Anterior')
+            .setEmoji('◀️') // Solo Emoji
             .setStyle(ButtonStyle.Primary)
             .setDisabled(currentPage === 0),
         new ButtonBuilder()
             .setCustomId('next')
-            .setLabel('▶️ Siguiente')
+            .setEmoji('▶️') // Solo Emoji
             .setStyle(ButtonStyle.Primary)
             .setDisabled(currentPage === totalPages - 1),
         new ButtonBuilder()
             .setCustomId('last')
-            .setLabel('⏭️ Última')
+            .setEmoji('⏭️') // Solo Emoji
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(currentPage === totalPages - 1)
     );
 }
 
-// Genera el embed para una página específica
+// Genera el embed para una página específica (SIN CAMBIOS)
 function createItemEmbedPage(items, pageIndex) {
     const ITEMS_PER_PAGE = 5;
     const start = pageIndex * ITEMS_PER_PAGE;
@@ -98,7 +99,6 @@ function createItemEmbedPage(items, pageIndex) {
         .setDescription(`*Página ${pageIndex + 1} de ${totalPages}. Solo se muestran ${ITEMS_PER_PAGE} objetos por página.*`)
         .setFooter({ text: `Página ${pageIndex + 1} de ${totalPages} | Consultado vía Zelda BOT | Usa los botones para navegar.` });
 
-    // Añade los campos para los items de la página
     itemsToShow.forEach(p => {
         embed.addFields({
             name: `**${p.nombre}**`,
@@ -111,67 +111,212 @@ function createItemEmbedPage(items, pageIndex) {
 }
 
 // =========================================================================
+// === LÓGICA DE EDICIÓN ===
+// =========================================================================
+
+// Crea los botones para seleccionar qué campo editar
+function createEditButtons(itemId) {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`edit_nombre_${itemId}`)
+            .setLabel('✏️ Nombre')
+            .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+            .setCustomId(`edit_descripcion_${itemId}`)
+            .setLabel('📖 Descripción')
+            .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+            .setCustomId(`edit_tipo_${itemId}`)
+            .setLabel('🏷️ Tipo')
+            .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+            .setCustomId(`edit_imagen_${itemId}`)
+            .setLabel('🖼️ Imagen URL')
+            .setStyle(ButtonStyle.Secondary)
+    );
+}
+
+// Genera el embed de confirmación y selección de campo
+function createEditSelectionEmbed(item) {
+    return new EmbedBuilder()
+        .setColor(LIST_EMBED_COLOR)
+        .setTitle(`🛠️ Editando: ${item.nombre}`)
+        .setDescription(`Selecciona qué campo deseas modificar para el objeto **${item.nombre}**.\n\n*Elige uno de los botones de abajo.*`)
+        .addFields(
+            { name: 'Descripción Actual', value: item.descripcion.substring(0, 100) + (item.descripcion.length > 100 ? '...' : ''), inline: false },
+            { name: 'Tipo Actual', value: item.tipo.toUpperCase(), inline: true },
+            { name: 'Imagen Actual', value: item.imagen, inline: true }
+        )
+        .setThumbnail(item.imagen);
+}
+
+
+// =========================================================================
 // === EVENTOS DEL BOT ===
 // =========================================================================
 
-// Evento que se dispara cuando el bot se conecta a Discord
 client.on('ready', () => {
     cargarCompendio(); 
     console.log(`¡Zelda BOT iniciado como ${client.user.tag}!`);
     client.user.setActivity('Registra los objetos del reino');
 });
 
-// Listener para la interacción con botones (la paginación)
+// Listener para interacciones: Paginación y Edición
 client.on('interactionCreate', async interaction => {
-    // Solo responde a interacciones de botones
-    if (!interaction.isButton()) return;
-    
-    // Solo responde a interacciones con el ID de paginación
-    if (!['first', 'prev', 'next', 'last'].includes(interaction.customId)) return;
+    // 1. Lógica de Paginación (Botones first, prev, next, last)
+    if (interaction.isButton() && ['first', 'prev', 'next', 'last'].includes(interaction.customId)) {
+        // ... (Lógica de paginación existente, no modificada)
+        const footerText = interaction.message.embeds[0].footer.text;
+        const match = footerText.match(/Página (\d+) de (\d+)/);
+        
+        if (!match) return; 
 
-    // Obtiene los datos de la lista y la página actual desde el footer
-    const footerText = interaction.message.embeds[0].footer.text;
-    const match = footerText.match(/Página (\d+) de (\d+)/);
-    
-    if (!match) return; // No es un embed de paginación
+        const currentPage = parseInt(match[1]) - 1; 
+        const items = Object.values(compendio);
 
-    const currentPage = parseInt(match[1]) - 1; // Ajuste a índice 0
-    const items = Object.values(compendio);
+        if (items.length === 0) return interaction.update({ content: 'El compendio está vacío.' });
 
-    if (items.length === 0) return interaction.update({ content: 'El compendio está vacío.' });
+        const ITEMS_PER_PAGE = 5;
+        const totalPages = Math.ceil(items.length / ITEMS_PER_PAGE);
+        let newPage = currentPage;
 
-    const ITEMS_PER_PAGE = 5;
-    const totalPages = Math.ceil(items.length / ITEMS_PER_PAGE);
-    let newPage = currentPage;
+        switch (interaction.customId) {
+            case 'first':
+                newPage = 0;
+                break;
+            case 'prev':
+                newPage = Math.max(0, currentPage - 1);
+                break;
+            case 'next':
+                newPage = Math.min(totalPages - 1, currentPage + 1);
+                break;
+            case 'last':
+                newPage = totalPages - 1;
+                break;
+        }
 
-    // Lógica para cambiar de página
-    switch (interaction.customId) {
-        case 'first':
-            newPage = 0;
-            break;
-        case 'prev':
-            newPage = Math.max(0, currentPage - 1);
-            break;
-        case 'next':
-            newPage = Math.min(totalPages - 1, currentPage + 1);
-            break;
-        case 'last':
-            newPage = totalPages - 1;
-            break;
+        const { embed: newEmbed } = createItemEmbedPage(items, newPage);
+        const newRow = createPaginationRow(newPage, totalPages);
+        
+        await interaction.update({ embeds: [newEmbed], components: [newRow] });
+        return; 
     }
-
-    // Genera el nuevo embed y actualiza el mensaje
-    const { embed: newEmbed } = createItemEmbedPage(items, newPage);
-    const newRow = createPaginationRow(newPage, totalPages);
     
-    // Reemplaza el mensaje original con la nueva página y botones
-    await interaction.update({ embeds: [newEmbed], components: [newRow] });
+    // 2. Lógica de Edición (Botones edit_...)
+    if (interaction.isButton() && interaction.customId.startsWith('edit_')) {
+        // Verificación de Staff (seguridad)
+        if (!interaction.member.roles.cache.has(ADMIN_ROLE_ID) && !interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+            return interaction.reply({ content: '¡Solo los Administradores Canon pueden usar las herramientas de edición!', ephemeral: true });
+        }
+        
+        await interaction.deferReply({ ephemeral: true });
+        
+        // El customId viene como 'edit_campo_itemId'
+        const parts = interaction.customId.split('_');
+        const campo = parts[1];
+        const itemId = parts[2];
+        const item = compendio[itemId];
+        
+        if (!item) {
+            return interaction.followUp({ content: 'El objeto que intentas editar ya no existe.', ephemeral: true });
+        }
+
+        // 2a. Validar Tipo si se selecciona Tipo
+        let prompt;
+        if (campo === 'tipo') {
+            prompt = `Has elegido editar el **TIPO**.\n\n**Escribe el nuevo valor:**\nDebe ser uno de estos: \`${TIPOS_VALIDOS.join(', ')}\``;
+        } else if (campo === 'imagen') {
+             prompt = `Has elegido editar la **IMAGEN URL**.\n\n**Escribe la nueva URL** (debe empezar por http/https):`;
+        } else {
+            prompt = `Has elegido editar el **${campo.toUpperCase()}**.\n\n**Escribe el nuevo valor:**`;
+        }
+        
+        // 2b. Almacenar el estado de edición del usuario
+        edicionActiva[interaction.user.id] = { 
+            itemId: itemId, 
+            campo: campo,
+            channelId: interaction.channelId
+        };
+
+        // 2c. Enviar el prompt al usuario
+        await interaction.followUp({ 
+            content: prompt, 
+            ephemeral: true // Solo el usuario que interactúa lo ve
+        });
+        
+        // Opcional: Eliminar los botones del mensaje original para evitar clics dobles
+        await interaction.message.edit({ components: [] });
+    }
 });
 
-// Cuando alguien envía un mensaje (comandos)
-client.on('messageCreate', message => {
+// Listener para Mensajes (Comandos y Respuestas de Edición)
+client.on('messageCreate', async message => {
     if (message.author.bot) return; 
 
+    // 1. Lógica de Respuesta de Edición (Debe ir antes de la lógica de comandos)
+    const userId = message.author.id;
+    if (edicionActiva[userId] && edicionActiva[userId].channelId === message.channelId) {
+        // Verificación de Staff (seguridad)
+        if (!message.member.roles.cache.has(ADMIN_ROLE_ID) && !message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+            // No debería pasar si el botón funcionó, pero es un buen control
+            delete edicionActiva[userId];
+            return message.reply({ content: 'No tienes permiso para responder a esta solicitud de edición.', ephemeral: true });
+        }
+        
+        const { itemId, campo } = edicionActiva[userId];
+        const item = compendio[itemId];
+        const nuevoValor = message.content;
+
+        if (!item) {
+            delete edicionActiva[userId];
+            return message.reply(`Error: El objeto con ID ${itemId} ya no existe.`);
+        }
+
+        // Validación de TIPO
+        if (campo === 'tipo' && !TIPOS_VALIDOS.includes(nuevoValor.toLowerCase())) {
+            return message.reply(`⚠️ **Valor Inválido:** El nuevo tipo debe ser uno de estos: \`${TIPOS_VALIDOS.join(', ')}\`. Inténtalo de nuevo en este mismo canal.`);
+        }
+        
+        // 1a. Si el nombre se cambia, la clave del objeto debe cambiar (ID)
+        let nuevoItemId = itemId;
+        if (campo === 'nombre') {
+            nuevoItemId = nuevoValor.toLowerCase().replace(/ /g, '_');
+            
+            // Revisa si ya existe un objeto con el nuevo nombre
+            if (compendio[nuevoItemId] && nuevoItemId !== itemId) {
+                return message.reply(`⚠️ **Nombre Existente:** Ya hay un objeto con el nombre **${nuevoValor}**. Usa un nombre diferente.`);
+            }
+            
+            // Guarda el nuevo nombre en el objeto antiguo
+            item.nombre = nuevoValor;
+            
+            // Crea una copia del objeto bajo el nuevo ID
+            compendio[nuevoItemId] = { ...item };
+            
+            // Elimina el objeto con el ID antiguo
+            delete compendio[itemId];
+            
+        } else {
+            // 1b. Actualiza el campo directamente
+            item[campo] = nuevoValor;
+        }
+
+        guardarCompendio();
+        delete edicionActiva[userId]; // Limpia el estado
+
+        const confirmEmbed = new EmbedBuilder()
+            .setColor(LIST_EMBED_COLOR)
+            .setTitle(`✅ Edición Completa`)
+            .setDescription(`El campo **${campo.toUpperCase()}** de **${item.nombre}** ha sido actualizado.`)
+            .addFields(
+                { name: `Nuevo Valor de ${campo.toUpperCase()}`, value: nuevoValor, inline: false }
+            )
+            .setThumbnail(item.imagen);
+        
+        return message.reply({ embeds: [confirmEmbed] });
+    }
+    
+    // 2. Lógica de Comandos (Comandos que inician con !Z)
     const prefix = '!Z'; 
     if (!message.content.startsWith(prefix)) return;
 
@@ -179,13 +324,15 @@ client.on('messageCreate', message => {
     const args = fullCommand.split(/ +/);
     const command = args.shift().toLowerCase();
     
-    // --- Comando: CREAR ITEM (RESTRICCIÓN POR ID DE ROL)
+    const hasAdminPerms = message.member.roles.cache.has(ADMIN_ROLE_ID) || message.member.permissions.has(PermissionsBitField.Flags.Administrator);
+
+
+    // --- Comando: CREAR ITEM (Mantenido)
     if (command === 'crearitem') {
-        // Verifica si el autor tiene el rol específico O si es un Administrador general
-        if (!message.member.roles.cache.has(ADMIN_ROLE_ID) && !message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        if (!hasAdminPerms) {
             return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden registrar objetos mágicos.');
         }
-
+        // ... (Lógica de crearitem)
         const regex = /"([^"]+)"/g;
         const matches = [...message.content.matchAll(regex)];
 
@@ -221,7 +368,7 @@ client.on('messageCreate', message => {
         guardarCompendio();
         
         const embed = new EmbedBuilder()
-            .setColor('#427522') 
+            .setColor(LIST_EMBED_COLOR) 
             .setTitle(`✅ Objeto Registrado: ${nombre}`)
             .setDescription(`Un nuevo artefacto ha sido añadido al Compendio de Hyrule.`)
             .addFields(
@@ -234,8 +381,68 @@ client.on('messageCreate', message => {
         
         message.channel.send({ embeds: [embed] });
     }
+    
+    // --- Comando: ELIMINAR ITEM (NUEVO)
+    if (command === 'eliminaritem') {
+        if (!hasAdminPerms) {
+            return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden eliminar objetos.');
+        }
+        
+        const regex = /"([^"]+)"/; 
+        const match = fullCommand.match(regex);
+        
+        if (!match) {
+            return message.reply('Uso: `!Zeliminaritem "Nombre Completo del Objeto"`');
+        }
+        
+        const nombreItem = match[1]; 
+        const id = nombreItem.toLowerCase().replace(/ /g, '_');
+        
+        if (!compendio[id]) {
+            return message.reply(`No se encontró ningún objeto llamado **${nombreItem}** en el Compendio.`);
+        }
+        
+        const itemEliminado = compendio[id];
+        delete compendio[id];
+        guardarCompendio();
 
-    // --- Comando: VER OBJETO INDIVIDUAL 
+        const embed = new EmbedBuilder()
+            .setColor('#cc0000') // Rojo para eliminación
+            .setTitle(`🗑️ Objeto Eliminado: ${itemEliminado.nombre}`)
+            .setDescription(`El objeto **${itemEliminado.nombre}** ha sido borrado permanentemente del Compendio de Nuevo Hyrule.`);
+        
+        message.channel.send({ embeds: [embed] });
+    }
+
+    // --- Comando: EDITAR ITEM (NUEVO - INICIO DE INTERACCIÓN)
+    if (command === 'editaritem') {
+        if (!hasAdminPerms) {
+            return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden editar objetos.');
+        }
+
+        const regex = /"([^"]+)"/; 
+        const match = fullCommand.match(regex);
+        
+        if (!match) {
+            return message.reply('Uso: `!Zeditaritem "Nombre Completo del Objeto"`');
+        }
+        
+        const nombreItem = match[1]; 
+        const itemId = nombreItem.toLowerCase().replace(/ /g, '_');
+        const item = compendio[itemId];
+
+        if (!item) {
+            return message.reply(`No se encontró ningún objeto llamado **${nombreItem}** para editar.`);
+        }
+        
+        // Iniciar el proceso de edición con el embed y los botones
+        const embed = createEditSelectionEmbed(item);
+        const row = createEditButtons(itemId); 
+        
+        message.channel.send({ embeds: [embed], components: [row] });
+    }
+
+    // --- Comando: VER OBJETO INDIVIDUAL (Mantenido)
     if (command === 'veritem') { 
         const regex = /"([^"]+)"/; 
         const match = fullCommand.match(regex);
@@ -253,7 +460,7 @@ client.on('messageCreate', message => {
         }
 
         const embed = new EmbedBuilder()
-            .setColor('#427522') 
+            .setColor(LIST_EMBED_COLOR) 
             .setTitle(item.nombre) 
             .addFields(
                 { name: 'Descripción', value: item.descripcion, inline: false },
@@ -267,7 +474,7 @@ client.on('messageCreate', message => {
         message.channel.send({ embeds: [embed] });
     }
     
-    // --- Comando: LISTAR OBJETOS 
+    // --- Comando: LISTAR OBJETOS (Mantenido)
     if (command === 'listaritems') {
         const items = Object.values(compendio);
         
