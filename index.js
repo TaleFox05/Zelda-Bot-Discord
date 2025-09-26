@@ -16,7 +16,8 @@ const path = require('path'); // Módulo para gestionar rutas de archivos
 // COLORES DE EMBEDS
 const LIST_EMBED_COLOR = '#427522';       // Compendio y General
 const ENEMY_EMBED_COLOR = '#E82A2A';      // Enemigos (Rojo)
-const TREASURE_EMBED_COLOR = '#634024';   // Cofres (NUEVO COLOR: 634024)
+const TREASURE_EMBED_COLOR = '#634024';   // Cofres (Marrón)
+const REWARD_EMBED_COLOR = '#F7BD28';     // Recompensa de Cofre (NUEVO)
 
 // ID del rol de Administrador que puede usar los comandos de Staff
 const ADMIN_ROLE_ID = "1420026299090731050"; 
@@ -25,19 +26,19 @@ const ADMIN_ROLE_ID = "1420026299090731050";
 const CANCEL_EDIT_WORD = '!cancelar'; 
 const TIPOS_VALIDOS = ['moneda', 'objeto', 'keyitem']; 
 
-// DEFINICIÓN DE COFRES (Con imágenes de ejemplo ACTUALIZADAS)
+// DEFINICIÓN DE COFRES
 const CHEST_TYPES = {
     pequeño: { 
         nombre: 'Cofre Pequeño', 
-        img: 'https://i.imgur.com/O6wo7s4.png' // Enlace actualizado
+        img: 'https://i.imgur.com/O6wo7s4.png'
     },
     grande: { 
         nombre: 'Cofre de Mazmorra', 
-        img: 'https://i.imgur.com/yqdATqX.png' // Enlace actualizado
+        img: 'https://i.imgur.com/yqdATqX.png'
     },
     jefe: { 
         nombre: 'Cofre de Llave Maestra', 
-        img: 'https://i.imgur.com/eLywDCo.png' // Enlace actualizado
+        img: 'https://i.imgur.com/eLywDCo.png'
     }
 };
 
@@ -270,6 +271,48 @@ client.on('interactionCreate', async interaction => {
             ephemeral: true 
         });
     }
+    
+    // 3. Lógica de Apertura de Cofre
+    if (interaction.isButton() && interaction.customId.startsWith('open_chest_')) {
+        const itemId = interaction.customId.replace('open_chest_', '');
+        const item = compendio[itemId];
+        
+        // Verifica si el cofre ya fue abierto (deshabilitando el botón)
+        if (interaction.message.components.length === 0) {
+             return interaction.reply({ content: 'Este cofre ya ha sido abierto.', ephemeral: true });
+        }
+
+        if (!item) {
+            return interaction.reply({ content: 'El tesoro no se encontró en el compendio. Notifica al Staff.', ephemeral: true });
+        }
+        
+        // Deshabilitar el botón original para evitar spam
+        const disabledRow = new ActionRowBuilder().addComponents(
+            ButtonBuilder.from(interaction.message.components[0].components[0]).setDisabled(true)
+        );
+
+        // Actualizar el mensaje original del cofre
+        await interaction.update({
+            components: [disabledRow] 
+        });
+
+        // Crear el nuevo embed de recompensa (REQUISITO DEL USUARIO)
+        const rewardEmbed = new EmbedBuilder()
+            .setColor(REWARD_EMBED_COLOR)
+            .setTitle(`✨ ¡Cofre Abierto! ✨`)
+            .setDescription(`**¡${interaction.user.username}** ha encontrado ${item.nombre} dentro!`)
+            .setThumbnail(item.imagen) // IMAGEN DEL ITEM COMO THUMBNAIL
+            .addFields(
+                { name: 'Descripción del Objeto', value: item.descripcion, inline: false },
+                { name: 'Tipo', value: item.tipo.toUpperCase(), inline: true }
+            );
+        
+        // Enviar el mensaje de recompensa
+        await interaction.channel.send({ 
+            content: `${interaction.user} ha abierto el cofre.`,
+            embeds: [rewardEmbed] 
+        });
+    }
 });
 
 client.on('messageCreate', async message => {
@@ -431,7 +474,7 @@ client.on('messageCreate', async message => {
                 { name: 'HP Base', value: hp.toString(), inline: true },
                 { name: 'Mensaje de Spawn', value: mensajeAparicion, inline: false }
             )
-            .setThumbnail(imagenUrl);
+            .setThumbnail(imagenUrl); // IMAGEN A THUMBNAIL
         
         message.channel.send({ embeds: [embed] });
     }
@@ -493,7 +536,7 @@ client.on('messageCreate', async message => {
                 { name: 'HP', value: enemigoBase.hp.toString(), inline: true },
                 { name: 'Cantidad', value: cantidad.toString(), inline: true }
             )
-            .setImage(enemigoBase.imagen)
+            .setThumbnail(enemigoBase.imagen) // IMAGEN A THUMBNAIL
             .setFooter({ text: `Encuentro en curso en el canal ${targetChannel.name}.` });
         
         
@@ -515,14 +558,12 @@ client.on('messageCreate', async message => {
             return message.reply('¡Solo los Administradores Canon pueden crear cofres!');
         }
         
-        // --- LÓGICA DE PARSING MÁS ROBUSTA (Mantenida) ---
+        // --- LÓGICA DE PARSING MÁS ROBUSTA ---
         const fullCommandContent = message.content.slice(prefix.length + command.length).trim();
         
-        // 1. Intentamos extraer el Canal ID (el primer argumento después del comando)
         const argsList = fullCommandContent.split(/\s+/);
         const canalId = argsList[0].replace(/<#|>/g, '');
         
-        // 2. Extraemos las dos cadenas entre comillas (Tipo y Nombre del Item) del resto del mensaje
         const quotedRegex = /"([^"]+)"/g;
         const matches = [...fullCommandContent.matchAll(quotedRegex)];
         
@@ -533,7 +574,6 @@ client.on('messageCreate', async message => {
         const tipoCofre = matches[0][1].toLowerCase(); 
         const nombreItem = matches[1][1];             
         const itemId = nombreItem.toLowerCase().replace(/ /g, '_');
-
         // ----------------------------------------------------------------
 
         const cofre = CHEST_TYPES[tipoCofre];
@@ -551,24 +591,19 @@ client.on('messageCreate', async message => {
             return message.reply('No se pudo encontrar ese Canal ID. Asegúrate de que el bot tenga acceso (Ver Canal y Enviar Mensajes).');
         }
 
-        // Crear el embed del cofre (ACTUALIZADO CON REQUISITOS DEL USUARIO)
+        // Crear el embed del cofre (ACTUALIZADO)
         const treasureEmbed = new EmbedBuilder()
             .setColor(TREASURE_EMBED_COLOR)
-            // NUEVO TÍTULO CON EMOJIS
             .setTitle(`🗝️ ¡Tesoro Encontrado! 📦`) 
-            // NUEVA DESCRIPCIÓN (Oculta el tipo de cofre del público)
             .setDescription(`¡Un cofre ha aparecido de la nada! ¡Ábrelo para revelar el tesoro!`) 
-            // ELIMINACIÓN DE LOS CAMPOS .addFields()
-            .setImage(cofre.img)
-            // Mantener el Item ID en el footer para futuras mecánicas.
+            .setThumbnail(cofre.img) // IMAGEN A THUMBNAIL
             .setFooter({ text: 'Pulsa el botón para interactuar. Item ID: ' + itemId }); 
         
-        // Botón de Abrir (Ejemplo para futura funcionalidad)
+        // Botón de Abrir (QUITANDO EMOJI)
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
                 .setCustomId(`open_chest_${itemId}`)
                 .setLabel('Abrir Cofre')
-                .setEmoji('🗝️')
                 .setStyle(ButtonStyle.Success)
         );
 
