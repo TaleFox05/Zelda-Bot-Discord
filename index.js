@@ -46,6 +46,8 @@ const CHEST_TYPES = {
 // --- ESTRUCTURA DE DATOS: KEYV (REDIS) ---
 const compendioDB = new Keyv(process.env.REDIS_URL, { namespace: 'items' }); 
 const enemigosDB = new Keyv(process.env.REDIS_URL, { namespace: 'enemies' }); 
+// NUEVO: Base de datos para los inventarios de personajes/tuppers
+const personajesDB = new Keyv(process.env.REDIS_URL, { namespace: 'personajes' }); 
 
 // CONFIGURACIÓN DEL CLIENTE (EL BOT)
 const client = new Client({ 
@@ -69,7 +71,7 @@ async function obtenerTodosEnemigos() {
     return Object.values(enemies);
 }
 
-// === MODIFICACIÓN: ORDENAR POR FECHA DE CREACIÓN ===
+// Devuelve el array de items ordenados por fecha
 async function obtenerTodosItems() {
     const items = {};
     for await (const [key, value] of compendioDB.iterator()) {
@@ -82,6 +84,54 @@ async function obtenerTodosItems() {
     
     return itemsArray;
 }
+
+// =========================================================================
+// === FUNCIONES DE GESTIÓN DE PERSONAJES ===
+// =========================================================================
+
+/**
+ * Genera la clave única para un personaje/tupper.
+ * @param {string} userId - La ID de Discord del usuario propietario.
+ * @param {string} nombrePersonaje - El nombre del tupper (personaje).
+ * @returns {string} La clave única compuesta.
+ */
+function generarPersonajeKey(userId, nombrePersonaje) {
+    const nombreLimpio = nombrePersonaje.toLowerCase().replace(/ /g, '_');
+    return `${userId}:${nombreLimpio}`;
+}
+
+/**
+ * Añade un objeto al inventario de un personaje.
+ * @param {string} key - La clave única del personaje (userId:nombre).
+ * @param {object} item - El objeto a añadir (de compendioDB).
+ * @returns {Promise<boolean>} True si se añadió, false si no se encontró el personaje.
+ */
+async function agregarItemAInventario(key, item) {
+    let personaje = await personajesDB.get(key);
+    
+    if (!personaje) {
+        return false;
+    }
+
+    // Inicializar el array de objetos si no existe
+    if (!personaje.objetos) {
+        personaje.objetos = [];
+    }
+
+    // Clonar el objeto del compendio y añadirlo al inventario
+    const itemEnInventario = {
+        nombre: item.nombre,
+        id: item.nombre.toLowerCase().replace(/ /g, '_'),
+        tipo: item.tipo,
+        // Se podrían añadir aquí propiedades de uso o desgaste
+    };
+
+    personaje.objetos.push(itemEnInventario);
+    
+    await personajesDB.set(key, personaje);
+    return true;
+}
+
 
 // =========================================================================
 // === LÓGICA DE PAGINACIÓN / EMBEDS ===
@@ -136,7 +186,6 @@ function createItemEmbedPage(items, pageIndex) {
     return { embed, totalPages };
 }
 
-// === MODIFICACIÓN: FUNCIÓN DE PAGINACIÓN PARA ENEMIGOS ===
 function createEnemyEmbedPage(enemies, pageIndex) {
     const ENEMIES_PER_PAGE = 5;
     const start = pageIndex * ENEMIES_PER_PAGE;
@@ -147,8 +196,8 @@ function createEnemyEmbedPage(enemies, pageIndex) {
     const embed = new EmbedBuilder()
         .setColor(ENEMY_EMBED_COLOR) 
         .setTitle('👹 Compendio de Monstruos de Nuevo Hyrule ⚔️')
-        .setDescription(`*Página ${pageIndex + 1} de ${totalPages}. Solo se muestran ${ENEMIES_PER_PAGE} enemigos por página.*`) // Nuevo: Mostrar info de paginación
-        .setFooter({ text: `Página ${pageIndex + 1} de ${totalPages} | Consultado vía Zelda BOT | Usa los botones para navegar.` }); // Nuevo: Footer con formato para interacción
+        .setDescription(`*Página ${pageIndex + 1} de ${totalPages}. Solo se muestran ${ENEMIES_PER_PAGE} enemigos por página.*`) 
+        .setFooter({ text: `Página ${pageIndex + 1} de ${totalPages} | Consultado vía Zelda BOT | Usa los botones para navegar.` }); 
 
     enemiesToShow.forEach(e => {
         embed.addFields({
@@ -219,7 +268,7 @@ client.on('interactionCreate', async interaction => {
         return; 
     }
     
-    // 2. Lógica de Apertura de Cofre
+    // 2. Lógica de Apertura de Cofre (sin cambios)
     if (interaction.isButton() && interaction.customId.startsWith('open_chest_')) {
         const itemId = interaction.customId.replace('open_chest_', '');
         const item = await compendioDB.get(itemId); 
@@ -232,34 +281,53 @@ client.on('interactionCreate', async interaction => {
             return interaction.reply({ content: 'El tesoro no se encontró en el compendio. Notifica al Staff.', ephemeral: true });
         }
         
-        // Deshabilitar el botón original 
+        // --- COMIENZA LA LÓGICA DE ASIGNACIÓN INTERACTIVA ---
+        
+        const characterKeyPrefix = `${interaction.user.id}:`;
+        const allCharacterKeys = [];
+
+        // Obtener solo los personajes del usuario actual
+        for await (const [key] of personajesDB.iterator()) {
+            if (key.startsWith(characterKeyPrefix)) {
+                allCharacterKeys.push(key.split(':')[1].replace(/_/g, ' ')); // Extraer el nombre del personaje
+            }
+        }
+
+        if (allCharacterKeys.length === 0) {
+             // Si no hay personajes, lo asigna al usuario por defecto (o simplemente desactiva el botón)
+             return interaction.reply({ content: 'No tienes personajes (tuppers) registrados para recibir este objeto. Usa `!Zcrearpersonaje "Nombre"` primero.', ephemeral: true });
+        }
+
+        // 1. Deshabilitar el botón original 
         const disabledRow = new ActionRowBuilder().addComponents(
             ButtonBuilder.from(interaction.message.components[0].components[0]).setDisabled(true)
         );
-
-        // Actualizar el mensaje original del cofre
-        await interaction.update({
-            components: [disabledRow] 
-        });
-
-        // Crear el nuevo embed de recompensa 
-        const rewardEmbed = new EmbedBuilder()
-            .setColor(REWARD_EMBED_COLOR)
-            .setTitle(`✨ ¡Cofre Abierto! ✨`)
-            .setDescription(`**¡${interaction.user.username}** ha encontrado ${item.nombre} dentro!`)
-            .setThumbnail(item.imagen) 
-            .addFields(
-                { name: 'Descripción del Objeto', value: item.descripcion, inline: false }
-            );
+        await interaction.update({ components: [disabledRow] }); 
         
-        // Enviar el mensaje de recompensa
-        await interaction.channel.send({ 
-            content: `${interaction.user} ha abierto el cofre.`,
-            embeds: [rewardEmbed] 
+        // 2. Crear un selector (dropdown) para elegir el personaje
+        const options = allCharacterKeys.map(name => ({
+            label: name,
+            value: name.toLowerCase().replace(/ /g, '_')
+        }));
+
+        const selectRow = new ActionRowBuilder().addComponents(
+            new StringSelectMenuBuilder()
+                .setCustomId(`assign_item_${itemId}_to_char`)
+                .setPlaceholder(`Selecciona el personaje para ${item.nombre}...`)
+                .addOptions(options)
+        );
+
+        // 3. Preguntar al usuario a quién asignarlo
+        const assignmentMessage = await interaction.channel.send({
+            content: `${interaction.user}, ¡Has encontrado **${item.nombre}**! ¿A qué personaje (Tupper) quieres asignarlo?`,
+            components: [selectRow]
         });
+
+        // Este es el flujo ideal. Por ahora, nos centraremos en el comando de staff para la prueba
+        return; 
     }
 
-    // 3. Lógica de Botones de Encuentro
+    // 3. Lógica de Botones de Encuentro (sin cambios)
     if (interaction.isButton() && interaction.customId.startsWith('enemy_')) {
         const action = interaction.customId.split('_')[1];
         
@@ -285,6 +353,41 @@ client.on('interactionCreate', async interaction => {
         }
         return;
     }
+
+    // 4. Lógica de Asignación por Select (cuando se pulsa el dropdown)
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('assign_item_')) {
+        const parts = interaction.customId.split('_');
+        const itemId = parts[2];
+        const characterId = interaction.values[0]; // ID limpia del personaje
+        
+        const characterKey = generarPersonajeKey(interaction.user.id, characterId);
+        const item = await compendioDB.get(itemId);
+        
+        // Bloquear si no es el usuario original
+        if (interaction.message.mentions.users.first().id !== interaction.user.id) {
+            return interaction.reply({ content: 'Esta asignación es solo para el usuario que abrió el cofre.', ephemeral: true });
+        }
+        
+        // 1. Asignar el ítem
+        const success = await agregarItemAInventario(characterKey, item);
+
+        if (success) {
+            // 2. Eliminar el mensaje de selección o deshabilitar
+            await interaction.message.delete();
+            
+            const characterName = characterId.replace(/_/g, ' ');
+            
+            const rewardEmbed = new EmbedBuilder()
+                .setColor(REWARD_EMBED_COLOR)
+                .setTitle(`✨ Objeto Asignado! ✨`)
+                .setDescription(`**${item.nombre}** ha sido añadido al inventario de **${characterName}** (Tupper de ${interaction.user.username}).`)
+                .setThumbnail(item.imagen);
+            
+            return interaction.reply({ embeds: [rewardEmbed], ephemeral: false });
+        } else {
+            return interaction.reply({ content: `Error: No se encontró el inventario para el personaje ${characterId}.`, ephemeral: true });
+        }
+    }
 });
 
 client.on('messageCreate', async message => {
@@ -292,8 +395,6 @@ client.on('messageCreate', async message => {
 
     const hasAdminPerms = message.member.roles.cache.has(ADMIN_ROLE_ID) || message.member.permissions.has(PermissionsBitField.Flags.Administrator);
 
-    // --- ELIMINADA LÓGICA DE RESPUESTA DE EDICIÓN ---
-    
     if (!message.content.startsWith(PREFIX)) return;
 
     const fullCommand = message.content.slice(PREFIX.length).trim();
@@ -301,7 +402,7 @@ client.on('messageCreate', async message => {
     const command = args.shift().toLowerCase();
 
     
-    // --- COMANDO: HELP ---
+    // --- COMANDO: HELP --- (Añadir comando de personaje)
     if (command === '-help') {
         const helpEmbed = new EmbedBuilder()
             .setColor('#0099ff')
@@ -313,6 +414,7 @@ client.on('messageCreate', async message => {
                     value: [
                         `\`!Zcrearitem "Nombre" "Desc" "Tipo" "URL"\`: Registra un nuevo objeto.`,
                         `\`!Zeliminaritem "Nombre"\`: Borra un objeto.`,
+                        `\`!Zdaritem "Personaje" "ItemNombre"\`: **(NUEVO)** Asigna un item del compendio al inventario de un personaje.`,
                         `\n**— Gestión de Encuentros —**`,
                         `\`!Zcrearenemigo "Nombre" "HP" "URL" ["Mensaje"] [pluralizar_nombre]\`: Registra un enemigo base.`,
                         `\`!Zeliminarenemigo "Nombre"\`: Borra un enemigo base.`, 
@@ -324,6 +426,7 @@ client.on('messageCreate', async message => {
                 {
                     name: '🌎 Comandos de Consulta (Público)',
                     value: [
+                        `\`!Zcrearpersonaje "Nombre del Tupper"\`: **(NUEVO)** Crea un inventario vinculado a un Tupper.`,
                         `\`!Zlistaritems\`: Muestra el compendio de objetos (ordenado por fecha de creación).`,
                         `\`!Zlistarenemigos\`: Muestra el compendio de monstruos (con paginación).`, 
                         `\`!Zveritem "Nombre"\`: Muestra la ficha detallada de un objeto.`,
@@ -337,7 +440,7 @@ client.on('messageCreate', async message => {
         return message.channel.send({ embeds: [helpEmbed] });
     }
     
-    // --- COMANDO: CREAR ITEM (Staff) ---
+    // --- COMANDO: CREAR ITEM (Staff) --- (Sin cambios)
     if (command === 'crearitem') {
         if (!hasAdminPerms) {
             return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden registrar objetos mágicos.');
@@ -375,9 +478,7 @@ client.on('messageCreate', async message => {
             imagen: imagenUrl, 
             registradoPor: message.author.tag,
             fecha: now.toLocaleDateString('es-ES'),
-            // === ADICIÓN PARA ORDENAMIENTO ===
             fechaCreacionMs: now.getTime() 
-            // =================================
         };
         
         await compendioDB.set(id, newItem); // GUARDADO A LA DB
@@ -397,7 +498,7 @@ client.on('messageCreate', async message => {
         message.channel.send({ embeds: [embed] });
     }
     
-    // --- COMANDO: ELIMINAR ITEM (Staff) ---
+    // --- COMANDO: ELIMINAR ITEM (Staff) --- (Sin cambios)
     if (command === 'eliminaritem') {
         if (!hasAdminPerms) {
             return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden eliminar objetos.');
@@ -428,9 +529,7 @@ client.on('messageCreate', async message => {
         message.channel.send({ embeds: [embed] });
     }
 
-    // --- ELIMINADO COMANDO: EDITAR ITEM ---
-
-    // --- COMANDO: VER ITEM (Público) ---
+    // --- COMANDO: VER ITEM (Público) --- (Sin cambios)
     if (command === 'veritem') { 
         const regex = /"([^"]+)"/; 
         const match = fullCommand.match(regex);
@@ -462,9 +561,8 @@ client.on('messageCreate', async message => {
         message.channel.send({ embeds: [embed] });
     }
     
-    // --- COMANDO: LISTAR ITEMS (Público) ---
+    // --- COMANDO: LISTAR ITEMS (Público) --- (Sin cambios)
     if (command === 'listaritems') {
-        // OBTENER DE LA DB Y ORDENAR
         const items = await obtenerTodosItems(); 
         
         if (items.length === 0) {
@@ -478,7 +576,98 @@ client.on('messageCreate', async message => {
         message.channel.send({ embeds: [embed], components: [row] });
     }
 
-    // --- COMANDO: CREAR ENEMIGO (Staff) ---
+    // --- NUEVO COMANDO: CREAR PERSONAJE/TUPPER (Público) ---
+    if (command === 'crearpersonaje') {
+        const regex = /"([^"]+)"/; 
+        const match = fullCommand.match(regex);
+        
+        if (!match) {
+            return message.reply('Uso: `!Zcrearpersonaje "Nombre del Tupper"` (Debe ser el nombre exacto de tu tupper).');
+        }
+        
+        const nombrePersonaje = match[1]; 
+        const personajeKey = generarPersonajeKey(message.author.id, nombrePersonaje);
+        
+        const existingPersonaje = await personajesDB.get(personajeKey);
+        
+        if (existingPersonaje) {
+            return message.reply(`¡Ya tienes un inventario registrado para el personaje **${nombrePersonaje}**!`);
+        }
+        
+        // Estructura inicial del inventario
+        const nuevoInventario = {
+            nombre: nombrePersonaje,
+            propietarioId: message.author.id,
+            propietarioTag: message.author.tag,
+            objetos: [],
+            rupias: 0,
+            fechaRegistro: new Date().toLocaleDateString('es-ES')
+        };
+        
+        await personajesDB.set(personajeKey, nuevoInventario);
+        
+        const embed = new EmbedBuilder()
+            .setColor(LIST_EMBED_COLOR) 
+            .setTitle(`👤 Personaje Registrado: ${nombrePersonaje}`)
+            .setDescription(`Se ha creado un inventario y ha sido vinculado a tu ID de Discord.`)
+            .addFields(
+                { name: 'Propietario', value: message.author.tag, inline: true },
+                { name: 'Inventario Inicial', value: 'Vacío (0 Objetos, 0 Rupias)', inline: true }
+            )
+            .setFooter({ text: 'Ahora puedes recibir objetos en este personaje.' });
+        
+        message.channel.send({ embeds: [embed] });
+    }
+    
+    // --- NUEVO COMANDO: DAR ITEM A PERSONAJE (Staff) ---
+    if (command === 'daritem') {
+        if (!hasAdminPerms) {
+            return message.reply('¡Solo los Administradores Canon pueden dar objetos directamente!');
+        }
+        
+        const regex = /"([^"]+)"/g;
+        const matches = [...message.content.matchAll(regex)];
+
+        if (matches.length < 2 || !message.mentions.users.first()) {
+            return message.reply('Sintaxis incorrecta. Uso: `!Zdaritem @Usuario "NombrePersonaje" "NombreItem"`');
+        }
+        
+        const targetUser = message.mentions.users.first();
+        const nombrePersonaje = matches[0][1];
+        const nombreItem = matches[1][1];
+        
+        // 1. Obtener datos del Item
+        const itemId = nombreItem.toLowerCase().replace(/ /g, '_');
+        const item = await compendioDB.get(itemId);
+        
+        if (!item) {
+            return message.reply(`El objeto **${nombreItem}** no se encontró en el compendio.`);
+        }
+        
+        // 2. Generar clave y obtener el inventario del personaje
+        const personajeKey = generarPersonajeKey(targetUser.id, nombrePersonaje);
+        
+        const success = await agregarItemAInventario(personajeKey, item);
+
+        if (!success) {
+            return message.reply(`No se encontró un inventario para el personaje **${nombrePersonaje}** vinculado a ${targetUser}. ¿Ha usado \`!Zcrearpersonaje\`?`);
+        }
+        
+        // 3. Notificación
+        const embed = new EmbedBuilder()
+            .setColor(REWARD_EMBED_COLOR)
+            .setTitle(`📦 Objeto Transferido a Inventario`)
+            .setDescription(`El Staff le ha dado **${item.nombre}** a **${nombrePersonaje}** (Tupper de ${targetUser.tag}).`)
+            .addFields(
+                { name: 'Descripción del Objeto', value: item.descripcion, inline: false },
+                { name: 'Inventario Actual', value: '*(Usa un futuro comando para verificarlo)*', inline: false }
+            )
+            .setThumbnail(item.imagen);
+        
+        message.channel.send({ content: `${targetUser}`, embeds: [embed] });
+    }
+
+    // --- COMANDO: CREAR ENEMIGO (Staff) --- (Sin cambios)
     if (command === 'crearenemigo') {
         if (!hasAdminPerms) {
             return message.reply('¡Solo los Administradores Canon pueden registrar enemigos!');
@@ -542,7 +731,7 @@ client.on('messageCreate', async message => {
         message.channel.send({ embeds: [embed] });
     }
     
-    // --- COMANDO: ELIMINAR ENEMIGO (Staff) ---
+    // --- COMANDO: ELIMINAR ENEMIGO (Staff) --- (Sin cambios)
     if (command === 'eliminarenemigo') {
         if (!hasAdminPerms) {
             return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden eliminar enemigos.');
@@ -573,7 +762,7 @@ client.on('messageCreate', async message => {
         message.channel.send({ embeds: [embed] });
     }
 
-    // --- COMANDO: SPAWN ENEMIGO (Staff) ---
+    // --- COMANDO: SPAWN ENEMIGO (Staff) --- (Sin cambios)
     if (command === 'spawn') {
         if (!hasAdminPerms) {
             return message.reply('¡Solo los Administradores Canon pueden invocar monstruos!');
@@ -683,7 +872,7 @@ client.on('messageCreate', async message => {
         message.reply(`✅ **${cantidad}x ${enemigoBase.nombre}** invocado(s) en ${targetChannel}${sinBotones ? ' (sin botones de acción)' : ''}.`);
     }
 
-    // --- COMANDO: CREAR COFRE (Staff) ---
+    // --- COMANDO: CREAR COFRE (Staff) --- (Inicia la nueva lógica interactiva)
     if (command === 'crearcofre') {
         if (!hasAdminPerms) {
             return message.reply('¡Solo los Administradores Canon pueden crear cofres!');
@@ -729,7 +918,7 @@ client.on('messageCreate', async message => {
         
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
-                .setCustomId(`open_chest_${itemId}`)
+                .setCustomId(`open_chest_${itemId}`) // Usamos el ID del ítem en el customId
                 .setLabel('Abrir Cofre')
                 .setStyle(ButtonStyle.Success)
         );
@@ -738,7 +927,7 @@ client.on('messageCreate', async message => {
         message.reply(`✅ **${cofre.nombre}** creado en ${targetChannel} con el item **${item.nombre}** dentro.`);
     }
 
-    // --- COMANDO: LISTAR ENEMIGOS (Público) ---
+    // --- COMANDO: LISTAR ENEMIGOS (Público) --- (Sin cambios)
     if (command === 'listarenemigos') {
         const enemies = await obtenerTodosEnemigos(); 
         
@@ -747,10 +936,10 @@ client.on('messageCreate', async message => {
         }
 
         const currentPage = 0;
-        const { embed, totalPages } = createEnemyEmbedPage(enemies, currentPage); // <--- Nuevo: Obtener embed y totalPages
-        const row = createPaginationRow(currentPage, totalPages); // <--- Nuevo: Crear botones
+        const { embed, totalPages } = createEnemyEmbedPage(enemies, currentPage); 
+        const row = createPaginationRow(currentPage, totalPages); 
         
-        message.channel.send({ embeds: [embed], components: [row] }); // <--- Nuevo: Enviar con botones
+        message.channel.send({ embeds: [embed], components: [row] }); 
     }
 });
 
