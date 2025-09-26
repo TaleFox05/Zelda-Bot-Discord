@@ -90,7 +90,22 @@ function cargarEnemigosBase() {
 }
 
 function guardarEnemigosBase() {
-    fs.writeFileSync(ENEMIES_DATA_FILE, JSON.stringify(enemigosBase, null, 4));
+    try {
+        const filePath = path.resolve(__dirname, 'enemies.json');
+
+        // Intenta escribir el archivo
+        fs.writeFileSync(filePath, JSON.stringify(enemigosBase, null, 4));
+
+        // Log de éxito (si llegamos aquí, el guardado funcionó)
+        console.log(`✅ [PERSISTENCIA] ¡Éxito! Enemigos guardados en: ${filePath}`);
+    } catch (error) {
+        // Log de fallo (si esto aparece, el problema es real)
+        console.error(`❌ [ERROR CRÍTICO DE PERSISTENCIA] No se pudo guardar enemies.json.`);
+        console.error(`Ruta intentada: ${path.resolve(__dirname, 'enemies.json')}`);
+        console.error(`Mensaje de error del sistema: ${error.message}`);
+
+        // Nota: El proceso seguirá, pero los datos no se guardarán.
+    }
 }
 
 
