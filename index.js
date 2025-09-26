@@ -136,6 +136,7 @@ function createItemEmbedPage(items, pageIndex) {
     return { embed, totalPages };
 }
 
+// === MODIFICACIÓN: FUNCIÓN DE PAGINACIÓN PARA ENEMIGOS ===
 function createEnemyEmbedPage(enemies, pageIndex) {
     const ENEMIES_PER_PAGE = 5;
     const start = pageIndex * ENEMIES_PER_PAGE;
@@ -146,8 +147,8 @@ function createEnemyEmbedPage(enemies, pageIndex) {
     const embed = new EmbedBuilder()
         .setColor(ENEMY_EMBED_COLOR) 
         .setTitle('👹 Compendio de Monstruos de Nuevo Hyrule ⚔️')
-        .setDescription(`*Página ${pageIndex + 1} de ${totalPages}. Solo se muestran ${ENEMIES_PER_PAGE} enemigos por página.*`)
-        .setFooter({ text: `Página ${pageIndex + 1} de ${totalPages} | Consultado vía Zelda BOT | Usa los comandos de edición para modificar.` });
+        .setDescription(`*Página ${pageIndex + 1} de ${totalPages}. Solo se muestran ${ENEMIES_PER_PAGE} enemigos por página.*`) // Nuevo: Mostrar info de paginación
+        .setFooter({ text: `Página ${pageIndex + 1} de ${totalPages} | Consultado vía Zelda BOT | Usa los botones para navegar.` }); // Nuevo: Footer con formato para interacción
 
     enemiesToShow.forEach(e => {
         embed.addFields({
@@ -173,27 +174,46 @@ client.on('ready', () => {
 client.on('interactionCreate', async interaction => {
     const hasAdminPerms = interaction.member.roles.cache.has(ADMIN_ROLE_ID) || interaction.member.permissions.has(PermissionsBitField.Flags.Administrator);
 
-    // 1. Lógica de Paginación (Objetos)
+    // 1. Lógica de Paginación (Objetos y Enemigos unificados)
     if (interaction.isButton() && ['first', 'prev', 'next', 'last'].includes(interaction.customId)) {
+        
         const footerText = interaction.message.embeds[0].footer.text;
+        const embedTitle = interaction.message.embeds[0].title;
         const match = footerText.match(/Página (\d+) de (\d+)/);
+        
         if (!match) return; 
         const currentPage = parseInt(match[1]) - 1; 
         
-        // Obtener ítems ORDENADOS
-        const items = await obtenerTodosItems(); 
+        let dataArray = [];
+        let createEmbedFunc;
+        let ITEMS_PER_PAGE = 5; 
+
+        // Determinar si es paginación de Items o Enemigos
+        if (embedTitle.includes('Objetos')) {
+            // Paginación de Items
+            dataArray = await obtenerTodosItems();
+            createEmbedFunc = createItemEmbedPage;
+            if (dataArray.length === 0) return interaction.update({ content: 'El compendio de objetos está vacío.' });
+        } else if (embedTitle.includes('Monstruos')) {
+            // Paginación de Enemigos
+            dataArray = await obtenerTodosEnemigos();
+            createEmbedFunc = createEnemyEmbedPage;
+            if (dataArray.length === 0) return interaction.update({ content: 'El compendio de monstruos está vacío.' });
+        } else {
+            return; // No es una interacción de paginación conocida.
+        }
         
-        if (items.length === 0) return interaction.update({ content: 'El compendio está vacío.' });
-        const ITEMS_PER_PAGE = 5;
-        const totalPages = Math.ceil(items.length / ITEMS_PER_PAGE);
+        const totalPages = Math.ceil(dataArray.length / ITEMS_PER_PAGE);
         let newPage = currentPage;
+        
         switch (interaction.customId) {
             case 'first': newPage = 0; break;
             case 'prev': newPage = Math.max(0, currentPage - 1); break;
             case 'next': newPage = Math.min(totalPages - 1, currentPage + 1); break;
             case 'last': newPage = totalPages - 1; break;
         }
-        const { embed: newEmbed } = createItemEmbedPage(items, newPage);
+
+        const { embed: newEmbed } = createEmbedFunc(dataArray, newPage);
         const newRow = createPaginationRow(newPage, totalPages);
         await interaction.update({ embeds: [newEmbed], components: [newRow] }); 
         return; 
@@ -305,7 +325,7 @@ client.on('messageCreate', async message => {
                     name: '🌎 Comandos de Consulta (Público)',
                     value: [
                         `\`!Zlistaritems\`: Muestra el compendio de objetos (ordenado por fecha de creación).`,
-                        `\`!Zlistarenemigos\`: Muestra el compendio de monstruos.`, 
+                        `\`!Zlistarenemigos\`: Muestra el compendio de monstruos (con paginación).`, 
                         `\`!Zveritem "Nombre"\`: Muestra la ficha detallada de un objeto.`,
                         `\`!Z-help\`: Muestra esta guía de comandos.`
                     ].join('\n'),
@@ -720,16 +740,17 @@ client.on('messageCreate', async message => {
 
     // --- COMANDO: LISTAR ENEMIGOS (Público) ---
     if (command === 'listarenemigos') {
-        const enemies = await obtenerTodosEnemigos(); // OBTENER DE LA DB
+        const enemies = await obtenerTodosEnemigos(); 
         
         if (enemies.length === 0) {
             return message.channel.send('***El Compendio de Monstruos está vacío. ¡Que se registre la primera criatura!***');
         }
 
         const currentPage = 0;
-        const { embed } = createEnemyEmbedPage(enemies, currentPage); 
+        const { embed, totalPages } = createEnemyEmbedPage(enemies, currentPage); // <--- Nuevo: Obtener embed y totalPages
+        const row = createPaginationRow(currentPage, totalPages); // <--- Nuevo: Crear botones
         
-        message.channel.send({ embeds: [embed] });
+        message.channel.send({ embeds: [embed], components: [row] }); // <--- Nuevo: Enviar con botones
     }
 });
 
