@@ -314,56 +314,54 @@ function createEnemyEmbedPage(enemies, pageIndex) {
  */
 async function manejarAsignacionCofre(userId, itemId, characterId, interaction) {
     const characterKey = generarPersonajeKey(userId, characterId);
+    const item = await compendioDB.get(itemId);
 
-    // Asumiendo que generamos el ID limpio aquí para la búsqueda, incluso si fue limpiado antes.
-    const itemIdLimpio = generarKeyLimpia(itemId.split('-')[0]);
-
-    const item = await compendioDB.get(itemIdLimpio); // Usamos el ID limpio para buscar
-
-    // Si el item no existe, fallar.
     if (!item) {
-        return interaction.followUp({ content: `Error: El objeto con ID **${itemIdLimpio}** ya no existe en el compendio.`, ephemeral: true });
+        return interaction.followUp({ content: `Error: El objeto con ID **${itemId}** ya no existe en el compendio.`, ephemeral: true });
     }
 
-    // 💥 BLOQUEO TEMPORAL DE MONEDAS (Punto 3)
-    if (item.tipo === 'moneda') {
-        if (interaction.message && interaction.message.delete) {
-            await interaction.message.delete().catch(console.error);
-        }
-        const itemName = item.nombre;
-        return interaction.followUp({
-            content: `**Atención:** El tesoro encontrado (**${itemName}**) es de tipo moneda. La funcionalidad para asignar rupias desde cofres está temporalmente deshabilitada.`,
-            ephemeral: true
-        });
-    }
-
-    // --- LÓGICA DE ASIGNACIÓN (solo para objetos/keyitems) ---
+    // --- LÓGICA CRÍTICA: AÑADIR ITEM AL INVENTARIO (incluye Rupias) ---
     const success = await agregarItemAInventario(characterKey, item);
 
     if (success) {
-        // ... (el resto de la generación del embed de recompensa para objetos) ...
+        // En un flujo normal de cofre, el mensaje de selección original debe eliminarse
         if (interaction.message && interaction.message.delete) {
             await interaction.message.delete().catch(console.error);
         }
 
         const characterName = characterId.replace(/_/g, ' ');
-        // Ya sabemos que no es moneda por el bloqueo de arriba, pero mantengo el código de embed por si lo necesitas más adelante:
+
+        const isMoneda = item.tipo === 'moneda';
+        const articulo = isMoneda ? 'una' : 'un';
+
         const rewardEmbed = new EmbedBuilder()
             .setColor(REWARD_EMBED_COLOR)
-            .setTitle(`✨ ¡Has encontrado un ${item.nombre}! ✨`)
+            // Título: ¡Has encontrado un/una [Nombre del Objeto]!
+            .setTitle(`✨ ¡Has encontrado ${articulo} ${item.nombre}! ✨`)
             .setThumbnail(item.imagen)
+            // Descripción: Descripción del objeto ANTES de la confirmación
             .setDescription(`*${item.descripcion}*`);
 
-        rewardEmbed.addFields({
-            name: 'Asignación de Objeto',
-            value: `**${item.nombre}** ha sido añadido al inventario de **${characterName}**.`,
-            inline: false
-        });
+        // Añadir campo de confirmación
+        if (isMoneda) {
+            // Moneda (Suma el valor)
+            rewardEmbed.addFields({
+                name: 'Asignación de Rupias',
+                value: `Se han añadido **${item.valorRupia}** rupias a la cuenta de **${characterName}**.`,
+                inline: false
+            });
+        } else {
+            // Objeto Normal (Añade a lista)
+            rewardEmbed.addFields({
+                name: 'Asignación de Objeto',
+                value: `**${item.nombre}** ha sido añadido al inventario de **${characterName}** (Tupper de ${interaction.user.username}).`,
+                inline: false
+            });
+        }
 
         return interaction.followUp({ embeds: [rewardEmbed], ephemeral: false });
-
     } else {
-        return interaction.followUp({ content: `Error: No se encontró el inventario para el personaje.`, ephemeral: true });
+        return interaction.followUp({ content: `Error: No se encontró el inventario para el personaje **${characterName}** vinculado a tu cuenta.`, ephemeral: true });
     }
 }
 
@@ -545,43 +543,45 @@ client.on('messageCreate', async message => {
 
 
     // --- COMANDO: HELP ---
-    if (command === 'z-help' || command === 'zhelp') {
+    if (command === '-help') {
         const helpEmbed = new EmbedBuilder()
-            .setColor(0x3B82F6) // Azul
-            .setTitle('📚 Guía de Comandos de Zelda BOT')
-            .setDescription('Usa `!` como prefijo para todos los comandos.');
+            .setColor('#0099ff')
+            .setTitle('📖 Guía de Comandos del Zelda BOT')
+            .setDescription('Aquí puedes consultar todos los comandos disponibles, diferenciando por el nivel de acceso.')
+            .addFields(
+                {
+                    name: '🛠️ Comandos de Administración (Solo Staff)',
+                    value: [
+                        `\`!Zcrearitem "Nombre" "Desc" "Tipo" "URL" ["ValorRupia"]\`: Registra un nuevo objeto.`,
+                        `\`!Zeliminaritem "Nombre"\`: Borra un objeto.`,
+                        `\`!Zdaritem @Usuario "Personaje" "ItemNombre"\`: Asigna un item del compendio al inventario de un personaje.`,
+                        `\`!Zeliminarrupias @Usuario "Personaje" <cantidad|all>\`: Elimina rupias del inventario.`,
+                        `\n**— Gestión de Encuentros —**`,
+                        `\`!Zcrearenemigo "Nombre" "HP" "URL" ["Mensaje"] [pluralizar_nombre]\`: Registra un enemigo base.`,
+                        `\`!Zeliminarenemigo "Nombre"\`: Borra un enemigo base.`,
+                        `\`!Zspawn <CanalID> "EnemigoNombre" [Cantidad] [sinbotones]\`: Hace aparecer enemigos.`,
+                        `\`!Zcrearcofre <CanalID> "Tipo" "ItemNombre"\`: Crea un cofre.`,
+                    ].join('\n'),
+                    inline: false
+                },
+                {
+                    name: '🌎 Comandos de Consulta (Público)',
+                    value: [
+                        `\`!Zcrearpersonaje "Nombre del Tupper"\`: Crea un inventario vinculado a un Tupper.`,
+                        `\`!Zpersonajes\`: Muestra la lista de personajes que has creado.`,
+                        `\`!Zinventario "Nombre del Tupper"\`: Muestra los objetos y rupias de tu personaje.`,
+                        `\`!Zeliminariteminv "Personaje" "Item"\`: Elimina un objeto de tu inventario.`,
+                        `\`!Zlistaritems\`: Muestra el compendio de objetos (ordenado por fecha de creación).`,
+                        `\`!Zlistarenemigos\`: Muestra el compendio de monstruos (con paginación).`,
+                        `\`!Zveritem "Nombre"\`: Muestra la ficha detallada de un objeto.`,
+                        `\`!Z-help\`: Muestra esta guía de comandos.`
+                    ].join('\n'),
+                    inline: false
+                }
+            )
+            .setFooter({ text: 'Desarrollado para el Rol de Nuevo Hyrule | Prefijo: !Z' });
 
-        // Comandos Públicos
-        helpEmbed.addFields({
-            name: '👤 Comandos Públicos (Personajes e Interacción)',
-            value:
-                '`!Zcrearpersonaje <Nombre>`: Registra un nuevo personaje (Inicia con 100 Rupias).\n' +
-                '`!Zinventario <Nombre>`: Muestra las rupias y objetos de tu personaje.\n' +
-                '`!Zdaritem <Personaje> <Item> @Destino`: Transfiere un objeto de tu inventario.\n' +
-                '`!Zdarrupia_p <Personaje> @Destino <Cantidad>`: Transfiere Rupias a otro personaje.',
-            inline: false
-        });
-
-        // Comandos de Staff
-        helpEmbed.addFields({
-            name: '🛠️ Comandos de Staff (Administración de DB)',
-            value:
-                '**Items y Compendio:**\n' +
-                '`!Zcrearitem "<Nombre>" "<Desc>" "<Tipo>" "<Imagen>" [ValorRupia]`\n' +
-                '`!Zeditaritem "<Nombre>" <campo> <nuevo_valor>`\n' +
-                '\n**Inventarios y Rupias:**\n' +
-                '`!Zdaritem_staff <Personaje> <Item> @Destino`: Asigna un objeto *desde el compendio*.\n' +
-                '`!Zdarrupia <Personaje> @Usuario <Cantidad>`: Añade Rupias al personaje. **(Staff)**\n' +
-                '`!Zquitarrupia @Usuario <Cantidad> <Personaje>`: Quita Rupias.\n' +
-                '`!Zreiniciarinv <Personaje>`: Borra todo el inventario y rupias.\n' +
-                '\n**Cofres (Roleplay):**\n' +
-                '`!Zcrearcofre #canal <tipo> "<Item>"`: Crea un cofre con un objeto específico.',
-            inline: false
-        });
-
-        helpEmbed.setFooter({ text: 'Los comandos Staff requieren el rol de Staff o permisos de Administrador.' });
-
-        return interaction.reply({ embeds: [helpEmbed], ephemeral: true });
+        return message.channel.send({ embeds: [helpEmbed] });
     }
 
     // --- COMANDO: CREAR ITEM (Staff) ---
@@ -737,14 +737,6 @@ client.on('messageCreate', async message => {
 
     // --- COMANDO: CREAR PERSONAJE/TUPPER (Público) ---
     if (command === 'crearpersonaje') {
-        const personajeData = {
-            //...
-            rupia: 100,
-            objetos: [],
-        };
-
-        await db.set(personajeKey, personajeData);
-
         const regex = /"([^"]+)"/;
         const match = fullCommand.match(regex);
 
@@ -906,37 +898,6 @@ client.on('messageCreate', async message => {
             .setFooter({ text: 'No se puede deshacer esta acción.' });
 
         message.channel.send({ embeds: [embed] });
-    }
-
-    // Comando !Zdarrupia (Staff)
-    if (command === 'darrupia') {
-        // 1. Verificar permisos (Staff)
-        if (!esStaff(interaction.member)) {
-            return interaction.reply({ content: 'Solo el Staff puede usar este comando.', ephemeral: true });
-        }
-
-        const [nombrePersonaje, targetMention, cantidadStr] = args;
-        const targetUser = interaction.client.users.cache.get(targetMention.replace(/[<@!>]/g, ''));
-        const cantidad = parseInt(cantidadStr);
-
-        if (!targetUser || isNaN(cantidad) || cantidad <= 0 || !nombrePersonaje) {
-            return interaction.reply({ content: 'Uso: `!Zdarrupia <NombrePersonaje> @Usuario <Cantidad>` (la cantidad debe ser positiva).', ephemeral: true });
-        }
-
-        const targetKey = generarPersonajeKey(targetUser.id, nombrePersonaje);
-        let personajeData = await db.get(targetKey);
-
-        if (!personajeData) {
-            return interaction.reply({ content: `Error: No se encontró al personaje **${nombrePersonaje}** para ${targetUser.username}.`, ephemeral: true });
-        }
-
-        personajeData.rupia = (personajeData.rupia || 0) + cantidad;
-        await db.set(targetKey, personajeData);
-
-        return interaction.reply({
-            content: `**[Staff]** Se han añadido **${cantidad}** rupias al personaje **${nombrePersonaje}** de ${targetUser.username}. Rupias totales: ${personajeData.rupia}.`,
-            ephemeral: false
-        });
     }
 
     // --- NUEVO COMANDO: ELIMINAR RUPIAS DE PERSONAJE (Staff) ---
