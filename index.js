@@ -44,8 +44,7 @@ const CHEST_TYPES = {
 
 // Almacén temporal para la edición. Guarda el ID del usuario y el ID del objeto que está editando.
 const edicionActiva = {};
-// Almacén para encuentros activos. **ELIMINADO para permitir múltiples spawns en un canal.**
-// const encuentrosActivos = {}; 
+// Nota: 'encuentrosActivos' fue eliminado para permitir spawns múltiples.
 
 // --- ESTRUCTURA DE DATOS ---
 const ITEMS_DATA_FILE = path.resolve(__dirname, 'items.json');
@@ -162,9 +161,11 @@ function createEnemyEmbedPage(enemies, pageIndex) {
         .setFooter({ text: `Página ${pageIndex + 1} de ${totalPages} | Consultado vía Zelda BOT | Usa los comandos de edición para modificar.` });
 
     enemiesToShow.forEach(e => {
+        // Campo 'Spawn Mensaje' eliminado por petición del usuario
+        const pluralizado = e.pluralizar_nombre !== false ? 'Sí' : 'No';
         embed.addFields({
             name: `**${e.nombre}**`,
-            value: `**HP Base:** ${e.hp}\n**Spawn Mensaje:** *${e.mensajeAparicion}*`,
+            value: `**HP Base:** ${e.hp}\n**Pluralización Automática:** ${pluralizado}`,
             inline: false
         });
     });
@@ -327,8 +328,8 @@ client.on('interactionCreate', async interaction => {
             .setDescription(`**¡${interaction.user.username}** ha encontrado ${item.nombre} dentro!`)
             .setThumbnail(item.imagen) // IMAGEN DEL ITEM COMO THUMBNAIL
             .addFields(
-                { name: 'Descripción del Objeto', value: item.descripcion, inline: false },
-                { name: 'Tipo', value: item.tipo.toUpperCase(), inline: true }
+                { name: 'Descripción del Objeto', value: item.descripcion, inline: false }
+                // Campo 'Tipo' eliminado por petición del usuario
             );
         
         // Enviar el mensaje de recompensa
@@ -336,6 +337,43 @@ client.on('interactionCreate', async interaction => {
             content: `${interaction.user} ha abierto el cofre.`,
             embeds: [rewardEmbed] 
         });
+    }
+
+    // 4. Lógica de Botones de Encuentro
+    if (interaction.isButton() && interaction.customId.startsWith('enemy_')) {
+        const action = interaction.customId.split('_')[1];
+        
+        if (action === 'accept') {
+            // Lógica de aceptar combate (por ahora, solo confirmación para futuros módulos)
+            await interaction.reply({ content: `**${interaction.user.username}** acepta el combate contra ${interaction.message.embeds[0].title.replace('⚔️ ¡ALERTA! ', '')}. ¡Que comience la batalla!`, ephemeral: false });
+
+            // Remover botones y footer para evitar interacciones repetidas
+            const editedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
+                .setFooter(null) 
+                .setDescription(interaction.message.embeds[0].description + `\n\n_El combate ha sido aceptado por ${interaction.user.username}._`);
+
+            await interaction.message.edit({ 
+                embeds: [editedEmbed], 
+                components: [] 
+            });
+
+
+        } else if (action === 'deny') {
+            // Lógica de denegar combate
+            const enemyName = interaction.message.embeds[0].title.replace('⚔️ ¡ALERTA! Enemigo(s) a la vista: ', '').replace(/!$/, '');
+            
+            // Eliminar el mensaje original del encuentro
+            await interaction.message.delete();
+
+            // Enviar mensaje de desaparición
+            await interaction.channel.send(`✨ **${interaction.user.username}** ha decidido evitar el encuentro. ¡Los ${enemyName} se han marchado!`);
+            
+            // Responder a la interacción (ya que el mensaje original fue eliminado)
+            // Se usa followUp ya que deferReply no fue usado, pero como se eliminó, el reply directo podría fallar
+            // Optamos por eliminar sin dejar rastro de la interacción inicial.
+            
+        }
+        return;
     }
 });
 
@@ -424,14 +462,14 @@ client.on('messageCreate', async message => {
                 {
                     name: '🛠️ Comandos de Administración (Solo Staff)',
                     value: [
-                        `\`!Zcrearitem "Nombre" "Desc" "Tipo" "URL"\`: Registra un nuevo objeto en el compendio.`,
-                        `\`!Zeliminaritem "Nombre"\`: Borra un objeto del compendio permanentemente.`,
-                        `\`!Zeditaritem "Nombre"\`: Inicia el menú interactivo para modificar los datos de un objeto.`,
+                        `\`!Zcrearitem "Nombre" "Desc" "Tipo" "URL"\`: Registra un nuevo objeto.`,
+                        `\`!Zeliminaritem "Nombre"\`: Borra un objeto.`,
+                        `\`!Zeditaritem "Nombre"\`: Inicia edición de objeto.`,
                         `\n**— Gestión de Encuentros —**`,
-                        `\`!Zcrearenemigo "Nombre" "HP" "URL" ["Mensaje"]\`: Registra un enemigo base.`,
-                        `\`!Zeliminarenemigo "Nombre"\`: Borra un enemigo base.`, // Nuevo comando
-                        `\`!Zspawn <CanalID> "EnemigoNombre" [Cantidad]\`: Hace aparecer uno o varios enemigos en un canal.`,
-                        `\`!Zcrearcofre <CanalID> "Tipo" "ItemNombre"\`: Crea un cofre con un item en un canal.`,
+                        `\`!Zcrearenemigo "Nombre" "HP" "URL" ["Mensaje"] [pluralizar_nombre]\`: Registra un enemigo base.`,
+                        `\`!Zeliminarenemigo "Nombre"\`: Borra un enemigo base.`, 
+                        `\`!Zspawn <CanalID> "EnemigoNombre" [Cantidad] [sinbotones]\`: Hace aparecer enemigos.`,
+                        `\`!Zcrearcofre <CanalID> "Tipo" "ItemNombre"\`: Crea un cofre.`,
                         `*Comandos de edición en curso pueden cancelarse escribiendo \`${CANCEL_EDIT_WORD}\`*`
                     ].join('\n'),
                     inline: false
@@ -442,7 +480,7 @@ client.on('messageCreate', async message => {
                     name: '🌎 Comandos de Consulta (Público)',
                     value: [
                         `\`!Zlistaritems\`: Muestra el compendio de objetos.`,
-                        `\`!Zlistarenemigos\`: Muestra el compendio de monstruos.`, // Nuevo comando
+                        `\`!Zlistarenemigos\`: Muestra el compendio de monstruos.`, 
                         `\`!Zveritem "Nombre"\`: Muestra la ficha detallada de un objeto.`,
                         `\`!Z-help\`: Muestra esta guía de comandos.`
                     ].join('\n'),
@@ -464,13 +502,26 @@ client.on('messageCreate', async message => {
         const matches = [...message.content.matchAll(regex)];
 
         if (matches.length < 3) {
-            return message.reply('Sintaxis incorrecta. Uso: `!Zcrearenemigo "Nombre" "HP" "URL de Imagen" ["Mensaje de Aparición Opcional"]`');
+            return message.reply('Sintaxis incorrecta. Uso: `!Zcrearenemigo "Nombre" "HP" "URL de Imagen" ["Mensaje de Aparición Opcional"] [pluralizar_nombre(true/false)]`');
         }
 
         const nombre = matches[0][1];
         const hp = parseInt(matches[1][1]);
         const imagenUrl = matches[2][1];
         const mensajeAparicion = matches.length > 3 ? matches[3][1] : `¡Un **${nombre}** ha aparecido de repente!`;
+        
+        // El último argumento después de las comillas, si existe, puede ser 'true' o 'false' para pluralizar
+        const allArgs = fullCommand.split(/\s+/);
+        let pluralizarNombre = true; 
+        if (allArgs.length > 3) {
+             const lastArg = allArgs[allArgs.length - 1].toLowerCase();
+             // Solo se ajusta si se especifica un booleano al final
+             if (lastArg === 'false') {
+                 pluralizarNombre = false;
+             } else if (lastArg === 'true') {
+                 pluralizarNombre = true;
+             }
+        }
         
         if (isNaN(hp) || hp <= 0) {
             return message.reply('El HP debe ser un número entero positivo.');
@@ -487,6 +538,7 @@ client.on('messageCreate', async message => {
             hp: hp,
             imagen: imagenUrl,
             mensajeAparicion: mensajeAparicion, 
+            pluralizar_nombre: pluralizarNombre, // Nuevo campo
             registradoPor: message.author.tag
         };
         
@@ -498,14 +550,14 @@ client.on('messageCreate', async message => {
             .setDescription(`Un nuevo enemigo ha sido añadido a la base de datos de monstruos.`)
             .addFields(
                 { name: 'HP Base', value: hp.toString(), inline: true },
-                { name: 'Mensaje de Spawn', value: mensajeAparicion, inline: false }
+                { name: 'Pluralización Automática', value: pluralizarNombre ? 'Sí (Añade "s")' : 'No (Usa nombre base)', inline: true }
             )
             .setThumbnail(imagenUrl);
         
         message.channel.send({ embeds: [embed] });
     }
     
-    // --- COMANDO: ELIMINAR ENEMIGO (Staff) --- (Nuevo)
+    // --- COMANDO: ELIMINAR ENEMIGO (Staff) ---
     if (command === 'eliminarenemigo') {
         if (!hasAdminPerms) {
             return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden eliminar enemigos.');
@@ -543,13 +595,11 @@ client.on('messageCreate', async message => {
             return message.reply('¡Solo los Administradores Canon pueden invocar monstruos!');
         }
         
-        // Separamos los argumentos: [CanalID], ["Nombre Enemigo"], [Cantidad (opcional)]
-        // Usamos una regex para el nombre entre comillas, si existe.
         const fullCommandContent = message.content.slice(prefix.length + command.length).trim();
         const argsList = fullCommandContent.split(/\s+/);
 
         if (argsList.length < 2) {
-            return message.reply('Sintaxis incorrecta. Uso: `!Zspawn <CanalID> "Nombre Enemigo" [Cantidad (por defecto 1)]`');
+            return message.reply('Sintaxis incorrecta. Uso: `!Zspawn <CanalID> "Nombre Enemigo" [Cantidad] [sinbotones]`');
         }
 
         const canalId = argsList[0].replace(/<#|>/g, '');
@@ -557,19 +607,37 @@ client.on('messageCreate', async message => {
         const nameMatch = fullCommandContent.match(/"([^"]+)"/);
         let nombreEnemigo;
         let cantidad = 1;
+        let sinBotones = false;
         
+        let remainingArgs = fullCommandContent;
         if (nameMatch) {
             nombreEnemigo = nameMatch[1];
-            // Intentar encontrar la cantidad después del nombre citado.
-            const partsAfterQuote = fullCommandContent.slice(fullCommandContent.indexOf(nameMatch[0]) + nameMatch[0].length).trim().split(/\s+/).filter(p => p.length > 0);
-            if (partsAfterQuote.length > 0 && !isNaN(parseInt(partsAfterQuote[0]))) {
-                cantidad = parseInt(partsAfterQuote[0]);
+            // Buscar argumentos después del nombre citado
+            remainingArgs = fullCommandContent.slice(fullCommandContent.indexOf(nameMatch[0]) + nameMatch[0].length).trim();
+            const partsAfterQuote = remainingArgs.split(/\s+/).filter(p => p.length > 0);
+            
+            if (partsAfterQuote.length > 0) {
+                const firstPart = partsAfterQuote[0].toLowerCase();
+                const lastPart = partsAfterQuote[partsAfterQuote.length - 1].toLowerCase();
+                
+                // Determinar la cantidad (si el primer argumento es un número)
+                if (!isNaN(parseInt(firstPart))) {
+                    cantidad = parseInt(firstPart);
+                }
+                
+                // Determinar si hay botones (puede ser el primer o el último argumento)
+                if (firstPart === 'sinbotones' || lastPart === 'sinbotones') {
+                    sinBotones = true;
+                }
             }
         } else if (argsList.length >= 2) {
-            // Asumir que el nombre no tiene espacios y es argsList[1], y la cantidad es argsList[2]
+            // Asumir nombre sin espacios: argsList[1]
             nombreEnemigo = argsList[1];
             if (argsList.length > 2 && !isNaN(parseInt(argsList[2]))) {
                 cantidad = parseInt(argsList[2]);
+            }
+            if (argsList.includes('sinbotones')) {
+                sinBotones = true;
             }
         } else {
              return message.reply('Sintaxis incorrecta. Debes especificar el nombre del enemigo.');
@@ -589,29 +657,52 @@ client.on('messageCreate', async message => {
             return message.reply('No se pudo encontrar ese Canal ID. Asegúrate de que el bot tenga acceso.');
         }
         
-        // Pluralización del mensaje de aparición
-        const spawnMessage = cantidad > 1 
-            ? `¡Varios **${enemigoBase.nombre}s** han aparecido de repente!` // Asumimos pluralización simple con 's'
+        const isPlural = cantidad > 1;
+        
+        // 1. Nombre y mensaje para el cuerpo del embed (pluralización controlada)
+        let nombreEnemigoPlural = enemigoBase.nombre;
+        if (isPlural) {
+            if (enemigoBase.pluralizar_nombre !== false) {
+                nombreEnemigoPlural += 's'; // Añade 's' si no se ha deshabilitado
+            }
+        }
+        
+        const spawnMessage = isPlural 
+            ? `¡Varios **${nombreEnemigoPlural}** han aparecido de repente!`
             : enemigoBase.mensajeAparicion;
 
+        // 2. Título del embed (Nombre siempre singular, (s) solo si es plural)
+        const titleText = `⚔️ ¡ALERTA! Enemigo${isPlural ? '(s)' : ''} a la vista: ${enemigoBase.nombre}!`;
 
         const spawnEmbed = new EmbedBuilder()
             .setColor(ENEMY_EMBED_COLOR)
-            .setTitle(`⚔️ ¡ALERTA! Enemigo(s) a la vista: ${enemigoBase.nombre}${cantidad > 1 ? 's' : ''}!`)
+            .setTitle(titleText)
             .setDescription(spawnMessage) 
             .addFields(
                 { name: 'HP Base', value: enemigoBase.hp.toString(), inline: true },
                 { name: 'Cantidad', value: cantidad.toString(), inline: true }
             )
-            .setThumbnail(enemigoBase.imagen) // IMAGEN A THUMBNAIL
+            .setThumbnail(enemigoBase.imagen) 
             .setFooter({ text: `Encuentro activo en el canal ${targetChannel.name}.` });
         
+        let components = [];
+        if (!sinBotones) {
+            const buttonRow = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setCustomId('enemy_accept')
+                    .setLabel('Aceptar')
+                    .setStyle(ButtonStyle.Success),
+                new ButtonBuilder()
+                    .setCustomId('enemy_deny')
+                    .setLabel('Denegar')
+                    .setStyle(ButtonStyle.Danger)
+            );
+            components.push(buttonRow);
+        }
         
-        await targetChannel.send({ embeds: [spawnEmbed] });
+        await targetChannel.send({ embeds: [spawnEmbed], components: components });
 
-        // Nota: Se ha ELIMINADO la lógica de 'encuentrosActivos' que bloqueaba nuevos spawns.
-
-        message.reply(`✅ **${cantidad}x ${enemigoBase.nombre}** invocado(s) en ${targetChannel}.`);
+        message.reply(`✅ **${cantidad}x ${enemigoBase.nombre}** invocado(s) en ${targetChannel}${sinBotones ? ' (sin botones de acción)' : ''}.`);
     }
 
     // --- COMANDO: CREAR COFRE (Staff) ---
@@ -620,7 +711,6 @@ client.on('messageCreate', async message => {
             return message.reply('¡Solo los Administradores Canon pueden crear cofres!');
         }
         
-        // --- LÓGICA DE PARSING MÁS ROBUSTA ---
         const fullCommandContent = message.content.slice(prefix.length + command.length).trim();
         
         const argsList = fullCommandContent.split(/\s+/);
@@ -637,8 +727,6 @@ client.on('messageCreate', async message => {
         const nombreItem = matches[1][1];             
         const itemId = nombreItem.toLowerCase().replace(/ /g, '_');
 
-        // ----------------------------------------------------------------
-
         const cofre = CHEST_TYPES[tipoCofre];
         const item = compendio[itemId];
         
@@ -651,20 +739,19 @@ client.on('messageCreate', async message => {
 
         const targetChannel = client.channels.cache.get(canalId);
         if (!targetChannel) {
-            return message.reply('No se pudo encontrar ese Canal ID. Asegúrate de que el bot tenga acceso (Ver Canal y Enviar Mensajes).');
+            return message.reply('No se pudo encontrar ese Canal ID. Asegúrate de que el bot tenga acceso.');
         }
 
         // Crear el embed del cofre (ACTUALIZADO)
         const treasureEmbed = new EmbedBuilder()
             .setColor(TREASURE_EMBED_COLOR)
-            // NUEVO TÍTULO Y EMOJIS
             .setTitle(`🔑 ¡Tesoro Encontrado! 🎁`) 
             .setDescription(`¡Un cofre ha aparecido de la nada! ¡Ábrelo para revelar el tesoro!`) 
-            .setThumbnail(cofre.img) // IMAGEN A THUMBNAIL
-            // ELIMINACIÓN DEL ITEM ID EN EL FOOTER
+            .setThumbnail(cofre.img) 
+            // Eliminación del Item ID en el footer
             .setFooter({ text: 'Pulsa el botón para interactuar.' }); 
         
-        // Botón de Abrir (SIN EMOJI)
+        // Botón de Abrir
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
                 .setCustomId(`open_chest_${itemId}`)
@@ -676,7 +763,7 @@ client.on('messageCreate', async message => {
         message.reply(`✅ **${cofre.nombre}** creado en ${targetChannel} con el item **${item.nombre}** dentro.`);
     }
 
-    // --- Comando: LISTAR ENEMIGOS (Público) --- (Nuevo)
+    // --- Comando: LISTAR ENEMIGOS (Público) ---
     if (command === 'listarenemigos') {
         const enemies = Object.values(enemigosBase);
         
@@ -685,13 +772,15 @@ client.on('messageCreate', async message => {
         }
 
         const currentPage = 0;
-        const { embed, totalPages } = createEnemyEmbedPage(enemies, currentPage);
-        // Nota: No se implementa paginación con botones para la lista de enemigos por simplicidad.
+        // Solo se muestra la primera página por ahora (sin paginación por botones)
+        const { embed } = createEnemyEmbedPage(enemies, currentPage); 
         
         message.channel.send({ embeds: [embed] });
     }
 
-    // --- Comando: CREAR ITEM 
+    // --- COMANDOS RESTANTES (CREAR ITEM, ELIMINAR ITEM, EDITAR ITEM, VER ITEM, LISTAR OBJETOS) ---
+    // ... Se mantienen sin cambios significativos en esta iteración.
+    
     if (command === 'crearitem') {
         if (!hasAdminPerms) {
             return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden registrar objetos mágicos.');
@@ -746,7 +835,6 @@ client.on('messageCreate', async message => {
         message.channel.send({ embeds: [embed] });
     }
     
-    // --- Comando: ELIMINAR ITEM 
     if (command === 'eliminaritem') {
         if (!hasAdminPerms) {
             return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden eliminar objetos.');
@@ -778,7 +866,6 @@ client.on('messageCreate', async message => {
         message.channel.send({ embeds: [embed] });
     }
 
-    // --- Comando: EDITAR ITEM 
     if (command === 'editaritem') {
         if (!hasAdminPerms) {
             return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden editar objetos.');
@@ -805,7 +892,6 @@ client.on('messageCreate', async message => {
         message.channel.send({ embeds: [embed], components: rows });
     }
 
-    // --- Comando: VER OBJETO INDIVIDUAL 
     if (command === 'veritem') { 
         const regex = /"([^"]+)"/; 
         const match = fullCommand.match(regex);
@@ -837,7 +923,6 @@ client.on('messageCreate', async message => {
         message.channel.send({ embeds: [embed] });
     }
     
-    // --- Comando: LISTAR OBJETOS 
     if (command === 'listaritems') {
         const items = Object.values(compendio);
         
