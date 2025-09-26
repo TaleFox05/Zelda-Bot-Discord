@@ -36,7 +36,7 @@ const CHEST_TYPES = {
     },
     grande: { 
         nombre: 'Cofre de Mazmorra', 
-        img: 'https://imgur.com/GfBNeMJ'
+        img: 'https://static.wikia.nocookie.net/zelda_gamepedia_en/images/0/0f/MM3D_Chest.png/revision/latest/scale-to-width/360?cb=20201125233413'
     },
     jefe: { 
         nombre: 'Cofre de Llave Maestra', 
