@@ -83,13 +83,26 @@ async function obtenerTodosItems() {
 }
 
 /**
+ * Genera la clave limpia para cualquier entrada de la DB (Item o Personaje).
+ * @param {string} nombre - El nombre con espacios, apóstrofes, etc.
+ * @returns {string} La clave limpia (ej: 'rupia_azul').
+ */
+function generarKeyLimpia(nombre) {
+    // Convierte a minúsculas, reemplaza espacios con guiones bajos,
+    // y elimina cualquier carácter que no sea letra, número o guion bajo.
+    return nombre.toLowerCase()
+        .replace(/ /g, '_')
+        .replace(/[^a-z0-9_]/g, '');
+}
+
+/**
  * Genera la clave única para un personaje/tupper.
  * @param {string} userId - La ID de Discord del usuario propietario.
  * @param {string} nombrePersonaje - El nombre del tupper (personaje).
  * @returns {string} La clave única compuesta.
  */
 function generarPersonajeKey(userId, nombrePersonaje) {
-    const nombreLimpio = nombrePersonaje.toLowerCase().replace(/ /g, '_');
+    const nombreLimpio = generarKeyLimpia(nombrePersonaje); // Usar la nueva función
     return `${userId}:${nombreLimpio}`;
 }
 
@@ -498,9 +511,13 @@ client.on('interactionCreate', async interaction => {
         const fullItemIdAndChest = parts[2];
 
         // Extraer solo la parte del ID antes del primer guion (clave limpia)
-        const itemId = fullItemIdAndChest.split('-')[0];
+        let itemId = fullItemIdAndChest.split('-')[0];
 
-        // El valor del select (characterId) viene limpio sin espacios
+        // **CORRECCIÓN AGRESIVA DEL ITEM ID (Confirmamos la limpieza)**:
+        // Limpia el ID de cualquier carácter que no sea letra, número o guion bajo
+        itemId = itemId.toLowerCase().replace(/[^a-z0-9_]/g, '');
+
+        // El characterId ya viene limpio del select
         const characterId = interaction.values[0];
 
         // Bloquear si no es el usuario original (usando la mención original)
@@ -1031,7 +1048,7 @@ client.on('messageCreate', async message => {
             return message.reply('El HP debe ser un número entero positivo.');
         }
 
-        const id = nombre.toLowerCase().replace(/ /g, '_');
+        const id = generarKeyLimpia(nombre);
 
         const existingEnemy = await enemigosDB.get(id);
         if (existingEnemy) {
