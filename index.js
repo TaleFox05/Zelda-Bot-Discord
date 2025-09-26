@@ -17,7 +17,7 @@ const path = require('path'); // Módulo para gestionar rutas de archivos
 const LIST_EMBED_COLOR = '#427522';       // Compendio y General
 const ENEMY_EMBED_COLOR = '#E82A2A';      // Enemigos (Rojo)
 const TREASURE_EMBED_COLOR = '#634024';   // Cofres (Marrón)
-const REWARD_EMBED_COLOR = '#F7BD28';     // Recompensa de Cofre (NUEVO)
+const REWARD_EMBED_COLOR = '#F7BD28';     // Recompensa de Cofre 
 
 // ID del rol de Administrador que puede usar los comandos de Staff
 const ADMIN_ROLE_ID = "1420026299090731050"; 
@@ -44,8 +44,8 @@ const CHEST_TYPES = {
 
 // Almacén temporal para la edición. Guarda el ID del usuario y el ID del objeto que está editando.
 const edicionActiva = {};
-// Almacén para encuentros activos (spawn del enemigo)
-const encuentrosActivos = {}; // { channelId: { enemigoId: '...', cantidad: 2, mensajeId: '...' } }
+// Almacén para encuentros activos. **ELIMINADO para permitir múltiples spawns en un canal.**
+// const encuentrosActivos = {}; 
 
 // --- ESTRUCTURA DE DATOS ---
 const ITEMS_DATA_FILE = path.resolve(__dirname, 'items.json');
@@ -148,6 +148,30 @@ function createItemEmbedPage(items, pageIndex) {
     return { embed, totalPages };
 }
 
+function createEnemyEmbedPage(enemies, pageIndex) {
+    const ENEMIES_PER_PAGE = 5;
+    const start = pageIndex * ENEMIES_PER_PAGE;
+    const end = start + ENEMIES_PER_PAGE;
+    const enemiesToShow = enemies.slice(start, end);
+    const totalPages = Math.ceil(enemies.length / ENEMIES_PER_PAGE);
+
+    const embed = new EmbedBuilder()
+        .setColor(ENEMY_EMBED_COLOR) 
+        .setTitle('👹 Compendio de Monstruos de Nuevo Hyrule ⚔️')
+        .setDescription(`*Página ${pageIndex + 1} de ${totalPages}. Solo se muestran ${ENEMIES_PER_PAGE} enemigos por página.*`)
+        .setFooter({ text: `Página ${pageIndex + 1} de ${totalPages} | Consultado vía Zelda BOT | Usa los comandos de edición para modificar.` });
+
+    enemiesToShow.forEach(e => {
+        embed.addFields({
+            name: `**${e.nombre}**`,
+            value: `**HP Base:** ${e.hp}\n**Spawn Mensaje:** *${e.mensajeAparicion}*`,
+            inline: false
+        });
+    });
+
+    return { embed, totalPages };
+}
+
 function createEditButtons(itemId) {
     const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -202,7 +226,7 @@ client.on('ready', () => {
 });
 
 client.on('interactionCreate', async interaction => {
-    // 1. Lógica de Paginación 
+    // 1. Lógica de Paginación (Objetos)
     if (interaction.isButton() && ['first', 'prev', 'next', 'last'].includes(interaction.customId)) {
         const footerText = interaction.message.embeds[0].footer.text;
         const match = footerText.match(/Página (\d+) de (\d+)/);
@@ -278,7 +302,7 @@ client.on('interactionCreate', async interaction => {
         const item = compendio[itemId];
         
         // Verifica si el cofre ya fue abierto (deshabilitando el botón)
-        if (interaction.message.components.length === 0) {
+        if (interaction.message.components.length === 0 || interaction.message.components[0].components[0].disabled) {
              return interaction.reply({ content: 'Este cofre ya ha sido abierto.', ephemeral: true });
         }
 
@@ -296,7 +320,7 @@ client.on('interactionCreate', async interaction => {
             components: [disabledRow] 
         });
 
-        // Crear el nuevo embed de recompensa (REQUISITO DEL USUARIO)
+        // Crear el nuevo embed de recompensa 
         const rewardEmbed = new EmbedBuilder()
             .setColor(REWARD_EMBED_COLOR)
             .setTitle(`✨ ¡Cofre Abierto! ✨`)
@@ -405,6 +429,7 @@ client.on('messageCreate', async message => {
                         `\`!Zeditaritem "Nombre"\`: Inicia el menú interactivo para modificar los datos de un objeto.`,
                         `\n**— Gestión de Encuentros —**`,
                         `\`!Zcrearenemigo "Nombre" "HP" "URL" ["Mensaje"]\`: Registra un enemigo base.`,
+                        `\`!Zeliminarenemigo "Nombre"\`: Borra un enemigo base.`, // Nuevo comando
                         `\`!Zspawn <CanalID> "EnemigoNombre" [Cantidad]\`: Hace aparecer uno o varios enemigos en un canal.`,
                         `\`!Zcrearcofre <CanalID> "Tipo" "ItemNombre"\`: Crea un cofre con un item en un canal.`,
                         `*Comandos de edición en curso pueden cancelarse escribiendo \`${CANCEL_EDIT_WORD}\`*`
@@ -416,7 +441,8 @@ client.on('messageCreate', async message => {
                 {
                     name: '🌎 Comandos de Consulta (Público)',
                     value: [
-                        `\`!Zlistaritems\`: Muestra el compendio completo.`,
+                        `\`!Zlistaritems\`: Muestra el compendio de objetos.`,
+                        `\`!Zlistarenemigos\`: Muestra el compendio de monstruos.`, // Nuevo comando
                         `\`!Zveritem "Nombre"\`: Muestra la ficha detallada de un objeto.`,
                         `\`!Z-help\`: Muestra esta guía de comandos.`
                     ].join('\n'),
@@ -474,32 +500,77 @@ client.on('messageCreate', async message => {
                 { name: 'HP Base', value: hp.toString(), inline: true },
                 { name: 'Mensaje de Spawn', value: mensajeAparicion, inline: false }
             )
-            .setThumbnail(imagenUrl); // IMAGEN A THUMBNAIL
+            .setThumbnail(imagenUrl);
         
         message.channel.send({ embeds: [embed] });
     }
     
+    // --- COMANDO: ELIMINAR ENEMIGO (Staff) --- (Nuevo)
+    if (command === 'eliminarenemigo') {
+        if (!hasAdminPerms) {
+            return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden eliminar enemigos.');
+        }
+        
+        const regex = /"([^"]+)"/; 
+        const match = fullCommand.match(regex);
+        
+        if (!match) {
+            return message.reply('Uso: `!Zeliminarenemigo "Nombre Completo del Enemigo"`');
+        }
+        
+        const nombreEnemigo = match[1]; 
+        const id = nombreEnemigo.toLowerCase().replace(/ /g, '_');
+        
+        if (!enemigosBase[id]) {
+            return message.reply(`No se encontró ningún enemigo llamado **${nombreEnemigo}** en la base de datos.`);
+        }
+        
+        const enemigoEliminado = enemigosBase[id];
+        delete enemigosBase[id];
+        guardarEnemigosBase();
+
+        const embed = new EmbedBuilder()
+            .setColor('#cc0000') 
+            .setTitle(`🗑️ Enemigo Eliminado: ${enemigoEliminado.nombre}`)
+            .setDescription(`El enemigo **${enemigoEliminado.nombre}** ha sido borrado permanentemente de la base de datos.`);
+        
+        message.channel.send({ embeds: [embed] });
+    }
+
     // --- COMANDO: SPAWN ENEMIGO (Staff) ---
     if (command === 'spawn') {
         if (!hasAdminPerms) {
             return message.reply('¡Solo los Administradores Canon pueden invocar monstruos!');
         }
         
-        const partes = fullCommand.split(/\s+/);
-        
-        if (partes.length < 2) {
+        // Separamos los argumentos: [CanalID], ["Nombre Enemigo"], [Cantidad (opcional)]
+        // Usamos una regex para el nombre entre comillas, si existe.
+        const fullCommandContent = message.content.slice(prefix.length + command.length).trim();
+        const argsList = fullCommandContent.split(/\s+/);
+
+        if (argsList.length < 2) {
             return message.reply('Sintaxis incorrecta. Uso: `!Zspawn <CanalID> "Nombre Enemigo" [Cantidad (por defecto 1)]`');
         }
 
-        const canalId = partes[1].replace(/<#|>/g, '');
+        const canalId = argsList[0].replace(/<#|>/g, '');
         
-        const nameMatch = fullCommand.match(/"([^"]+)"/);
+        const nameMatch = fullCommandContent.match(/"([^"]+)"/);
         let nombreEnemigo;
+        let cantidad = 1;
         
         if (nameMatch) {
             nombreEnemigo = nameMatch[1];
-        } else if (partes.length > 2) {
-            nombreEnemigo = partes[2]; 
+            // Intentar encontrar la cantidad después del nombre citado.
+            const partsAfterQuote = fullCommandContent.slice(fullCommandContent.indexOf(nameMatch[0]) + nameMatch[0].length).trim().split(/\s+/).filter(p => p.length > 0);
+            if (partsAfterQuote.length > 0 && !isNaN(parseInt(partsAfterQuote[0]))) {
+                cantidad = parseInt(partsAfterQuote[0]);
+            }
+        } else if (argsList.length >= 2) {
+            // Asumir que el nombre no tiene espacios y es argsList[1], y la cantidad es argsList[2]
+            nombreEnemigo = argsList[1];
+            if (argsList.length > 2 && !isNaN(parseInt(argsList[2]))) {
+                cantidad = parseInt(argsList[2]);
+            }
         } else {
              return message.reply('Sintaxis incorrecta. Debes especificar el nombre del enemigo.');
         }
@@ -511,43 +582,34 @@ client.on('messageCreate', async message => {
             return message.reply(`El enemigo **${nombreEnemigo}** no está registrado. Usa \`!Zcrearenemigo\`.`);
         }
 
-        let cantidad = 1;
-        if (nameMatch) {
-            const lastPart = partes[partes.length - 1];
-            if (!isNaN(parseInt(lastPart))) {
-                cantidad = parseInt(lastPart);
-            }
-        } else if (partes.length > 3 && !isNaN(parseInt(partes[3]))) {
-            cantidad = parseInt(partes[3]);
-        }
-        
         cantidad = Math.max(1, Math.min(10, cantidad)); 
 
         const targetChannel = client.channels.cache.get(canalId);
         if (!targetChannel) {
             return message.reply('No se pudo encontrar ese Canal ID. Asegúrate de que el bot tenga acceso.');
         }
+        
+        // Pluralización del mensaje de aparición
+        const spawnMessage = cantidad > 1 
+            ? `¡Varios **${enemigoBase.nombre}s** han aparecido de repente!` // Asumimos pluralización simple con 's'
+            : enemigoBase.mensajeAparicion;
+
 
         const spawnEmbed = new EmbedBuilder()
             .setColor(ENEMY_EMBED_COLOR)
-            .setTitle(`⚔️ ¡ALERTA! Enemigo a la vista: ${enemigoBase.nombre}!`)
-            .setDescription(enemigoBase.mensajeAparicion) 
+            .setTitle(`⚔️ ¡ALERTA! Enemigo(s) a la vista: ${enemigoBase.nombre}${cantidad > 1 ? 's' : ''}!`)
+            .setDescription(spawnMessage) 
             .addFields(
-                { name: 'HP', value: enemigoBase.hp.toString(), inline: true },
+                { name: 'HP Base', value: enemigoBase.hp.toString(), inline: true },
                 { name: 'Cantidad', value: cantidad.toString(), inline: true }
             )
             .setThumbnail(enemigoBase.imagen) // IMAGEN A THUMBNAIL
-            .setFooter({ text: `Encuentro en curso en el canal ${targetChannel.name}.` });
+            .setFooter({ text: `Encuentro activo en el canal ${targetChannel.name}.` });
         
         
-        const sentMessage = await targetChannel.send({ embeds: [spawnEmbed] });
+        await targetChannel.send({ embeds: [spawnEmbed] });
 
-        encuentrosActivos[canalId] = {
-            enemigoId: enemigoId,
-            cantidad: cantidad,
-            hpRestante: enemigoBase.hp * cantidad, 
-            mensajeId: sentMessage.id
-        };
+        // Nota: Se ha ELIMINADO la lógica de 'encuentrosActivos' que bloqueaba nuevos spawns.
 
         message.reply(`✅ **${cantidad}x ${enemigoBase.nombre}** invocado(s) en ${targetChannel}.`);
     }
@@ -574,6 +636,7 @@ client.on('messageCreate', async message => {
         const tipoCofre = matches[0][1].toLowerCase(); 
         const nombreItem = matches[1][1];             
         const itemId = nombreItem.toLowerCase().replace(/ /g, '_');
+
         // ----------------------------------------------------------------
 
         const cofre = CHEST_TYPES[tipoCofre];
@@ -594,12 +657,14 @@ client.on('messageCreate', async message => {
         // Crear el embed del cofre (ACTUALIZADO)
         const treasureEmbed = new EmbedBuilder()
             .setColor(TREASURE_EMBED_COLOR)
-            .setTitle(`🗝️ ¡Tesoro Encontrado! 📦`) 
+            // NUEVO TÍTULO Y EMOJIS
+            .setTitle(`🔑 ¡Tesoro Encontrado! 🎁`) 
             .setDescription(`¡Un cofre ha aparecido de la nada! ¡Ábrelo para revelar el tesoro!`) 
             .setThumbnail(cofre.img) // IMAGEN A THUMBNAIL
-            .setFooter({ text: 'Pulsa el botón para interactuar. Item ID: ' + itemId }); 
+            // ELIMINACIÓN DEL ITEM ID EN EL FOOTER
+            .setFooter({ text: 'Pulsa el botón para interactuar.' }); 
         
-        // Botón de Abrir (QUITANDO EMOJI)
+        // Botón de Abrir (SIN EMOJI)
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
                 .setCustomId(`open_chest_${itemId}`)
@@ -609,6 +674,21 @@ client.on('messageCreate', async message => {
 
         targetChannel.send({ embeds: [treasureEmbed], components: [row] });
         message.reply(`✅ **${cofre.nombre}** creado en ${targetChannel} con el item **${item.nombre}** dentro.`);
+    }
+
+    // --- Comando: LISTAR ENEMIGOS (Público) --- (Nuevo)
+    if (command === 'listarenemigos') {
+        const enemies = Object.values(enemigosBase);
+        
+        if (enemies.length === 0) {
+            return message.channel.send('***El Compendio de Monstruos está vacío. ¡Que se registre la primera criatura!***');
+        }
+
+        const currentPage = 0;
+        const { embed, totalPages } = createEnemyEmbedPage(enemies, currentPage);
+        // Nota: No se implementa paginación con botones para la lista de enemigos por simplicidad.
+        
+        message.channel.send({ embeds: [embed] });
     }
 
     // --- Comando: CREAR ITEM 
