@@ -47,8 +47,8 @@ const edicionActiva = {};
 // Nota: 'encuentrosActivos' fue eliminado para permitir spawns múltiples.
 
 // --- ESTRUCTURA DE DATOS ---
-const ITEMS_DATA_FILE = path.resolve(__dirname, 'items.json');
-const ENEMIES_DATA_FILE = path.resolve(__dirname, 'enemies.json');
+const ITEMS_DATA_FILE = path.resolve(__dirname, 'data', 'items.json');
+const ENEMIES_DATA_FILE = path.resolve(__dirname, 'data', 'enemies.json');
 let compendio = {};
 let enemigosBase = {};
 
