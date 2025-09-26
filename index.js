@@ -344,11 +344,15 @@ client.on('interactionCreate', async interaction => {
         return; 
     }
     
-    // 2. Lógica de Apertura de Cofre
+    // 2. Lógica de Apertura de Cofre - MODIFICADO MENSAJE DE SELECCIÓN
     if (interaction.isButton() && interaction.customId.startsWith('open_chest_')) {
-        const itemId = interaction.customId.replace('open_chest_', '');
-        const item = await compendioDB.get(itemId); 
+        const fullId = interaction.customId.replace('open_chest_', '');
+        const [itemId, chestType] = fullId.split('-'); // Ahora el ID es itemID-tipoCofre
         
+        // El cofre fue creado con el ID del item, vamos a buscar el objeto original
+        const item = await compendioDB.get(itemId); 
+        const cofreInfo = CHEST_TYPES[chestType || 'pequeño']; // Usamos el tipo para el mensaje
+
         if (interaction.message.components.length === 0 || interaction.message.components[0].components[0].disabled) {
             return interaction.reply({ content: 'Este cofre ya ha sido abierto.', ephemeral: true });
         }
@@ -380,15 +384,17 @@ client.on('interactionCreate', async interaction => {
             value: name.toLowerCase().replace(/ /g, '_')
         }));
 
+        // El customId ahora lleva el itemID y el TIPO de cofre
         const selectRow = new ActionRowBuilder().addComponents(
             new StringSelectMenuBuilder()
-                .setCustomId(`assign_item_${itemId}_to_char`)
-                .setPlaceholder(`Selecciona el personaje para ${item.nombre}...`)
+                .setCustomId(`assign_item_${itemId}_${chestType}`) // Guardamos el tipo de cofre
+                .setPlaceholder(`Selecciona el personaje...`)
                 .addOptions(options)
         );
 
+        // Mensaje de cofre encontrado (sin el nombre del objeto)
         await interaction.channel.send({
-            content: `${interaction.user}, ¡Has encontrado **${item.nombre}**! ¿A qué personaje (Tupper) quieres asignarlo?`,
+            content: `${interaction.user}, ¡Has encontrado un **${cofreInfo.nombre}**! ¿A qué personaje (Tupper) quieres asignarle el tesoro?`,
             components: [selectRow]
         });
 
@@ -422,24 +428,28 @@ client.on('interactionCreate', async interaction => {
         return;
     }
 
-    // 4. Lógica de Asignación por Select (cuando se pulsa el dropdown) - CORREGIDO CON DEFER
+    // 4. Lógica de Asignación por Select (cuando se pulsa el dropdown) - CORREGIDO LÓGICA DE MONEDA Y UX
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('assign_item_')) {
         // Deferir para evitar "Interacción Fallida"
         await interaction.deferUpdate({ ephemeral: false }); 
         
         const parts = interaction.customId.split('_');
-        const itemId = parts[2];
+        const itemId = parts[2]; // parts[3] es el tipo de cofre, no necesario aquí.
         const characterId = interaction.values[0];
         
         const characterKey = generarPersonajeKey(interaction.user.id, characterId);
-        const item = await compendioDB.get(itemId);
+        const item = await compendioDB.get(itemId); // Item encontrado
+        
+        if (!item) {
+             return interaction.followUp({ content: 'Error: El objeto de este cofre ya no existe en el compendio.', ephemeral: true });
+        }
         
         // Bloquear si no es el usuario original (usando la mención original)
         if (interaction.message.content.includes(interaction.user.id) === false) {
-            // Usamos followUp ya que la interacción ya fue deferida
             return interaction.followUp({ content: 'Esta asignación es solo para el usuario que abrió el cofre.', ephemeral: true });
         }
         
+        // --- LÓGICA CRÍTICA: AÑADIR ITEM AL INVENTARIO (incluye Rupias) ---
         const success = await agregarItemAInventario(characterKey, item);
 
         if (success) {
@@ -448,16 +458,33 @@ client.on('interactionCreate', async interaction => {
             
             const characterName = characterId.replace(/_/g, ' ');
             
+            // Determinar si es un artículo o una moneda
+            const isMoneda = item.tipo === 'moneda';
+            const articulo = isMoneda ? 'una' : 'un';
+            
             const rewardEmbed = new EmbedBuilder()
                 .setColor(REWARD_EMBED_COLOR)
-                .setTitle(`✨ Objeto Asignado! ✨`)
-                .setThumbnail(item.imagen);
+                // Título: ¡Has encontrado un/una [Nombre del Objeto]!
+                .setTitle(`✨ ¡Has encontrado ${articulo} ${item.nombre}! ✨`) 
+                .setThumbnail(item.imagen)
+                // Descripción: Descripción del objeto ANTES de la confirmación
+                .setDescription(`*${item.descripcion}*`);
             
-            // Si el objeto era una moneda, el mensaje es diferente
-            if (item.tipo === 'moneda') {
-                 rewardEmbed.setDescription(`¡Has encontrado **${item.nombre}**! Se han añadido **${item.valorRupia}** rupias al inventario de **${characterName}**.`);
+            // Añadir campo de confirmación
+            if (isMoneda) {
+                // Moneda
+                rewardEmbed.addFields({
+                    name: 'Asignación de Rupias',
+                    value: `Se han añadido **${item.valorRupia}** rupias a la cuenta de **${characterName}**.`,
+                    inline: false
+                });
             } else {
-                 rewardEmbed.setDescription(`**${item.nombre}** ha sido añadido al inventario de **${characterName}** (Tupper de ${interaction.user.username}).`);
+                // Objeto Normal
+                rewardEmbed.addFields({
+                    name: 'Asignación de Objeto',
+                    value: `**${item.nombre}** ha sido añadido al inventario de **${characterName}** (Tupper de ${interaction.user.username}).`,
+                    inline: false
+                });
             }
 
             // Usamos followUp después de deferUpdate
@@ -739,7 +766,7 @@ client.on('messageCreate', async message => {
         
         const items = personaje.objetos || [];
         
-        // Obtener Avatar (Tupper o Usuario) - CORREGIDO
+        // Obtener Avatar (Tupper o Usuario) 
         const avatarUrl = await getTupperAvatar(client, nombrePersonaje, message.member);
 
         // PAGINACIÓN Y MOSTRAR ITEMS
@@ -1158,7 +1185,7 @@ client.on('messageCreate', async message => {
         message.reply(`✅ **${cantidad}x ${enemigoBase.nombre}** invocado(s) en ${targetChannel}${sinBotones ? ' (sin botones de acción)' : ''}.`);
     }
 
-    // --- COMANDO: CREAR COFRE (Staff) ---
+    // --- COMANDO: CREAR COFRE (Staff) - MODIFICADO BOTÓN CUSTOM ID
     if (command === 'crearcofre') {
         if (!hasAdminPerms) {
             return message.reply('¡Solo los Administradores Canon pueden crear cofres!');
@@ -1200,12 +1227,13 @@ client.on('messageCreate', async message => {
             .setTitle(`🔑 ¡Tesoro Encontrado! 🎁`) 
             .setDescription(`¡Un cofre ha aparecido de la nada! ¡Ábrelo para revelar el tesoro!`) 
             .setThumbnail(cofre.img) 
-            .setFooter({ text: 'Pulsa el botón para interactuar.' }); 
+            .setFooter({ text: `Pulsa el botón para interactuar. Contiene: ${item.nombre}` }); // Pequeño spoiler para staff
         
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
-                .setCustomId(`open_chest_${itemId}`)
-                .setLabel('Abrir Cofre')
+                // El custom ID ahora lleva el item ID y el tipo de cofre
+                .setCustomId(`open_chest_${itemId}-${tipoCofre}`)
+                .setLabel(`Abrir ${cofre.nombre}`)
                 .setStyle(ButtonStyle.Success)
         );
 
