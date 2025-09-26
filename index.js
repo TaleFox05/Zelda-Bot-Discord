@@ -17,7 +17,7 @@ const Keyv = require('keyv');
 // COLORES DE EMBEDS
 const LIST_EMBED_COLOR = '#427522';       // Compendio y General
 const ENEMY_EMBED_COLOR = '#E82A2A';      // Enemigos (Rojo)
-const TREASURE_EMBED_COLOR = '#634024';   // Cofres (Marrón)
+const TREASURE_EMBED_COLOR = '#634024';  // Cofres (Marrón)
 const REWARD_EMBED_COLOR = '#F7BD28';     // Recompensa de Cofre 
 const PREFIX = '!Z'; 
 
@@ -49,13 +49,14 @@ const edicionActiva = {};
 
 // --- ESTRUCTURA DE DATOS: KEYV (REDIS) ---
 // Keyv gestiona la conexión a la URL de Redis proporcionada por Railway (REDIS_URL)
+// ¡Asegúrate de que process.env.REDIS_URL esté configurada en tu archivo .env!
 const compendioDB = new Keyv(process.env.REDIS_URL, { namespace: 'items' }); 
 const enemigosDB = new Keyv(process.env.REDIS_URL, { namespace: 'enemies' }); 
 
 // CONFIGURACIÓN DEL CLIENTE (EL BOT)
 const client = new Client({ 
     intents: [
-        GatewayIntentBits.Guilds,           
+        GatewayIntentBits.Guilds,       
         GatewayIntentBits.GuildMessages,    
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMessageReactions,
@@ -129,6 +130,7 @@ function createItemEmbedPage(items, pageIndex) {
     itemsToShow.forEach(p => {
         embed.addFields({
             name: `**${p.nombre}**`,
+            // ⚠️ Importante: Confirma que la propiedad es 'descripcion' (sin tilde)
             value: `**Descripción:** *${p.descripcion}*\n**Tipo:** ${p.tipo.toUpperCase()} | **Estado:** ${p.disponible ? 'Disponible' : 'En Posesión'}`,
             inline: false
         });
@@ -196,10 +198,12 @@ function createEditSelectionEmbed(item) {
         .setTitle(`🛠️ Editando: ${item.nombre}`)
         .setDescription(`Selecciona qué campo deseas modificar para el objeto **${item.nombre}**.\n\n*Elige uno de los botones de abajo o **Cancelar Edición**.*`)
         .addFields(
+            // ⚠️ Importante: Confirma que la propiedad es 'descripcion' (sin tilde)
             { name: 'Descripción Actual', value: item.descripcion.substring(0, 100) + (item.descripcion.length > 100 ? '...' : ''), inline: false },
             { name: 'Tipo Actual', value: item.tipo.toUpperCase(), inline: true },
             { name: 'Imagen Actual', value: item.imagen, inline: true }
         )
+        // ⚠️ Importante: Confirma que la propiedad es 'imagen' (sin URL)
         .setThumbnail(item.imagen);
 }
 
@@ -270,7 +274,7 @@ client.on('interactionCreate', async interaction => {
         if (campo === 'tipo') {
             prompt = `Has elegido editar el **TIPO**.\n\n**Escribe el nuevo valor:**\nDebe ser uno de estos: \`${TIPOS_VALIDOS.join(', ')}\`\n\n*Para cancelar, escribe \`${CANCEL_EDIT_WORD}\`.*`;
         } else if (campo === 'imagen') {
-             prompt = `Has elegido editar la **IMAGEN URL**.\n\n**Escribe la nueva URL** (debe empezar por http/https):\n\n*Para cancelar, escribe \`${CANCEL_EDIT_WORD}\`.*`;
+            prompt = `Has elegido editar la **IMAGEN URL**.\n\n**Escribe la nueva URL** (debe empezar por http/https):\n\n*Para cancelar, escribe \`${CANCEL_EDIT_WORD}\`.*`;
         } else {
             prompt = `Has elegido editar el **${campo.toUpperCase()}**.\n\n**Escribe el nuevo valor:**\n\n*Para cancelar, escribe \`${CANCEL_EDIT_WORD}\`.*`;
         }
@@ -293,7 +297,7 @@ client.on('interactionCreate', async interaction => {
         const item = await compendioDB.get(itemId); // Obtenemos el item de la DB
         
         if (interaction.message.components.length === 0 || interaction.message.components[0].components[0].disabled) {
-             return interaction.reply({ content: 'Este cofre ya ha sido abierto.', ephemeral: true });
+            return interaction.reply({ content: 'Este cofre ya ha sido abierto.', ephemeral: true });
         }
 
         if (!item) {
@@ -399,10 +403,13 @@ client.on('messageCreate', async message => {
             // Si el nombre cambia, borramos el antiguo y guardamos el nuevo
             await compendioDB.delete(itemId);
             item.nombre = nuevoValor;
+            // ⚠️ IMPORTANTE: Si el nombre cambia, guardamos el item con la nueva clave (nuevoItemId)
             await compendioDB.set(nuevoItemId, item);
             
         } else {
+            // Esto cubre 'descripcion', 'tipo', e 'imagen'
             item[campo] = nuevoValor;
+            // ⚠️ IMPORTANTE: Guardamos con la clave original (itemId), ya que solo cambió una propiedad interna.
             await compendioDB.set(itemId, item);
         }
 
@@ -411,6 +418,7 @@ client.on('messageCreate', async message => {
         const confirmEmbed = new EmbedBuilder()
             .setColor(LIST_EMBED_COLOR)
             .setTitle(`✅ Edición Completa`)
+            // ⚠️ Usamos el item.nombre actualizado si es el campo 'nombre', si no el original.
             .setDescription(`El campo **${campo.toUpperCase()}** de **${item.nombre}** ha sido actualizado.`)
             .addFields(
                 { name: `Nuevo Valor de ${campo.toUpperCase()}`, value: nuevoValor, inline: false }
@@ -503,7 +511,7 @@ client.on('messageCreate', async message => {
             descripcion: descripcion,
             tipo: tipo,
             disponible: true, 
-            imagen: imagenUrl,
+            imagen: imagenUrl, // ⚠️ La clave es 'imagen'
             registradoPor: message.author.tag,
             fecha: new Date().toLocaleDateString('es-ES')
         };
@@ -604,11 +612,13 @@ client.on('messageCreate', async message => {
             .setColor(LIST_EMBED_COLOR) 
             .setTitle(item.nombre) 
             .addFields(
+                // ⚠️ Confirma que la propiedad es 'descripcion' (sin tilde)
                 { name: 'Descripción', value: item.descripcion, inline: false },
                 { name: 'Tipo', value: item.tipo.toUpperCase(), inline: true },
                 { name: 'Estado', value: item.disponible ? 'Disponible' : 'En Posesión', inline: true },
                 { name: 'Fecha de Registro', value: item.fecha, inline: true }
             )
+            // ⚠️ Confirma que la propiedad es 'imagen' (sin URL)
             .setImage(item.imagen)
             .setFooter({ text: `Registrado por: ${item.registradoPor}` });
         
@@ -651,12 +661,12 @@ client.on('messageCreate', async message => {
         const allArgs = fullCommand.split(/\s+/);
         let pluralizarNombre = true; 
         if (allArgs.length > 3) {
-             const lastArg = allArgs[allArgs.length - 1].toLowerCase();
-             if (lastArg === 'false') {
-                 pluralizarNombre = false;
-             } else if (lastArg === 'true') {
-                 pluralizarNombre = true;
-             }
+            const lastArg = allArgs[allArgs.length - 1].toLowerCase();
+            if (lastArg === 'false') {
+                pluralizarNombre = false;
+            } else if (lastArg === 'true') {
+                pluralizarNombre = true;
+            }
         }
         
         if (isNaN(hp) || hp <= 0) {
@@ -772,7 +782,7 @@ client.on('messageCreate', async message => {
                 sinBotones = true;
             }
         } else {
-             return message.reply('Sintaxis incorrecta. Debes especificar el nombre del enemigo.');
+            return message.reply('Sintaxis incorrecta. Debes especificar el nombre del enemigo.');
         }
 
         const enemigoId = nombreEnemigo.toLowerCase().replace(/ /g, '_');
@@ -854,7 +864,7 @@ client.on('messageCreate', async message => {
         }
 
         const tipoCofre = matches[0][1].toLowerCase(); 
-        const nombreItem = matches[1][1];             
+        const nombreItem = matches[1][1]; 
         const itemId = nombreItem.toLowerCase().replace(/ /g, '_');
 
         const cofre = CHEST_TYPES[tipoCofre];
