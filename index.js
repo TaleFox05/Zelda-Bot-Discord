@@ -291,6 +291,66 @@ function createEnemyEmbedPage(enemies, pageIndex) {
     return { embed, totalPages };
 }
 
+/**
+ * Maneja la lógica de obtener el objeto del compendio, asignarlo al personaje
+ * y enviar el mensaje de confirmación (tanto para objetos como para monedas).
+ * @param {string} userId - ID del usuario.
+ * @param {string} itemId - ID limpio del item (ej: 'rupia_azul').
+ * @param {string} characterId - ID limpio del personaje (ej: 'mikato_tale_tsubashaki').
+ * @param {object} interaction - El objeto de la interacción (para responder/followUp).
+ */
+async function manejarAsignacionCofre(userId, itemId, characterId, interaction) {
+    const characterKey = generarPersonajeKey(userId, characterId);
+    const item = await compendioDB.get(itemId);
+
+    if (!item) {
+        return interaction.followUp({ content: `Error: El objeto con ID **${itemId}** ya no existe en el compendio.`, ephemeral: true });
+    }
+
+    // --- LÓGICA CRÍTICA: AÑADIR ITEM AL INVENTARIO (incluye Rupias) ---
+    const success = await agregarItemAInventario(characterKey, item);
+
+    if (success) {
+        // En un flujo normal de cofre, el mensaje de selección original debe eliminarse
+        if (interaction.message && interaction.message.delete) {
+            await interaction.message.delete().catch(console.error);
+        }
+
+        const characterName = characterId.replace(/_/g, ' ');
+
+        const isMoneda = item.tipo === 'moneda';
+        const articulo = isMoneda ? 'una' : 'un';
+
+        const rewardEmbed = new EmbedBuilder()
+            .setColor(REWARD_EMBED_COLOR)
+            // Título: ¡Has encontrado un/una [Nombre del Objeto]!
+            .setTitle(`✨ ¡Has encontrado ${articulo} ${item.nombre}! ✨`)
+            .setThumbnail(item.imagen)
+            // Descripción: Descripción del objeto ANTES de la confirmación
+            .setDescription(`*${item.descripcion}*`);
+
+        // Añadir campo de confirmación
+        if (isMoneda) {
+            // Moneda (Suma el valor)
+            rewardEmbed.addFields({
+                name: 'Asignación de Rupias',
+                value: `Se han añadido **${item.valorRupia}** rupias a la cuenta de **${characterName}**.`,
+                inline: false
+            });
+        } else {
+            // Objeto Normal (Añade a lista)
+            rewardEmbed.addFields({
+                name: 'Asignación de Objeto',
+                value: `**${item.nombre}** ha sido añadido al inventario de **${characterName}** (Tupper de ${interaction.user.username}).`,
+                inline: false
+            });
+        }
+
+        return interaction.followUp({ embeds: [rewardEmbed], ephemeral: false });
+    } else {
+        return interaction.followUp({ content: `Error: No se encontró el inventario para el personaje **${characterName}** vinculado a tu cuenta.`, ephemeral: true });
+    }
+}
 
 // =========================================================================
 // === EVENTOS DEL BOT (Manejo de Interacciones/Mensajes) ===
@@ -428,7 +488,7 @@ client.on('interactionCreate', async interaction => {
         return;
     }
 
-    // 4. Lógica de Asignación por Select (cuando se pulsa el dropdown) - CORRECCIÓN DEFINITIVA DE EXTRACCIÓN
+    // 4. Lógica de Asignación por Select (cuando se pulsa el dropdown) - USANDO FUNCIÓN CENTRALIZADA
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('assign_item_')) {
         // Deferir para evitar "Interacción Fallida"
         await interaction.deferUpdate({ ephemeral: false });
@@ -437,70 +497,19 @@ client.on('interactionCreate', async interaction => {
         // parts[2] contiene "itemId-tipoCofre" o simplemente "itemId"
         const fullItemIdAndChest = parts[2];
 
-        // **CORRECCIÓN CLAVE:** El ID del objeto es siempre la parte ANTES del primer guion.
-        const itemId = fullItemIdAndChest.split('-')[0]; // Esto DEBE dar 'rupia_azul' o 'poción_roja'
+        // Extraer solo la parte del ID antes del primer guion (clave limpia)
+        const itemId = fullItemIdAndChest.split('-')[0];
 
+        // El valor del select (characterId) viene limpio sin espacios
         const characterId = interaction.values[0];
-
-        const characterKey = generarPersonajeKey(interaction.user.id, characterId);
-
-        // Obtener el objeto base (compendioDB busca por el ID limpio: 'rupia_azul')
-        const item = await compendioDB.get(itemId);
-
-        if (!item) {
-            // Mensaje de error más descriptivo
-            return interaction.followUp({ content: `Error: El objeto con ID **${itemId}** ya no existe en el compendio.`, ephemeral: true });
-        }
 
         // Bloquear si no es el usuario original (usando la mención original)
         if (interaction.message.content.includes(interaction.user.id) === false) {
             return interaction.followUp({ content: 'Esta asignación es solo para el usuario que abrió el cofre.', ephemeral: true });
         }
 
-        // --- LÓGICA CRÍTICA: AÑADIR ITEM AL INVENTARIO ---
-        // Esta función maneja automáticamente si es 'moneda' (suma rupias) o 'objeto' (añade a lista).
-        const success = await agregarItemAInventario(characterKey, item);
-
-        if (success) {
-            // El mensaje original del menú desplegable ya no es necesario
-            await interaction.message.delete().catch(console.error);
-
-            const characterName = characterId.replace(/_/g, ' ');
-
-            // Determinar si es un artículo o una moneda para el mensaje de UX
-            const isMoneda = item.tipo === 'moneda';
-            const articulo = isMoneda ? 'una' : 'un';
-
-            const rewardEmbed = new EmbedBuilder()
-                .setColor(REWARD_EMBED_COLOR)
-                // Título: ¡Has encontrado un/una [Nombre del Objeto]!
-                .setTitle(`✨ ¡Has encontrado ${articulo} ${item.nombre}! ✨`)
-                .setThumbnail(item.imagen)
-                // Descripción: Descripción del objeto ANTES de la confirmación
-                .setDescription(`*${item.descripcion}*`);
-
-            // Añadir campo de confirmación (Diferenciación de Rupias/Objeto)
-            if (isMoneda) {
-                // Moneda (Suma)
-                rewardEmbed.addFields({
-                    name: 'Asignación de Rupias',
-                    value: `Se han añadido **${item.valorRupia}** rupias a la cuenta de **${characterName}**.`,
-                    inline: false
-                });
-            } else {
-                // Objeto Normal (Añade a lista)
-                rewardEmbed.addFields({
-                    name: 'Asignación de Objeto',
-                    value: `**${item.nombre}** ha sido añadido al inventario de **${characterName}** (Tupper de ${interaction.user.username}).`,
-                    inline: false
-                });
-            }
-
-            // Usamos followUp después de deferUpdate
-            return interaction.followUp({ embeds: [rewardEmbed], ephemeral: false });
-        } else {
-            return interaction.followUp({ content: `Error: No se encontró el inventario para el personaje ${characterId}.`, ephemeral: true });
-        }
+        // Llamar a la función centralizada para manejar la asignación y el mensaje.
+        return manejarAsignacionCofre(interaction.user.id, itemId, characterId, interaction);
     }
 });
 
