@@ -15,10 +15,10 @@ const Keyv = require('keyv');
 // =========================================================================
 
 // COLORES DE EMBEDS
-const LIST_EMBED_COLOR = '#427522';       // Compendio y General
-const ENEMY_EMBED_COLOR = '#E82A2A';      // Enemigos (Rojo)
-const TREASURE_EMBED_COLOR = '#634024';  // Cofres (Marrón)
-const REWARD_EMBED_COLOR = '#F7BD28';     // Recompensa de Cofre 
+const LIST_EMBED_COLOR = '#427522';       // Compendio y General
+const ENEMY_EMBED_COLOR = '#E82A2A';      // Enemigos (Rojo)
+const TREASURE_EMBED_COLOR = '#634024';   // Cofres (Marrón)
+const REWARD_EMBED_COLOR = '#F7BD28';     // Recompensa de Cofre 
 const PREFIX = '!Z';
 
 // ID del rol de Administrador que puede usar los comandos de Staff
@@ -42,6 +42,9 @@ const CHEST_TYPES = {
         img: 'https://frommetolu.wordpress.com/wp-content/uploads/2012/01/treasure_chest_n64.png'
     }
 };
+
+// GIF DE LINK LEVANTANDO EL TESORO (Para la recompensa final del cofre)
+const LINK_TREASURE_GIF = 'https://i.imgur.com/k2I3w9Y.gif'; // Un GIF estándar de Link levantando algo
 
 // --- ESTRUCTURA DE DATOS: KEYV (REDIS) ---
 const compendioDB = new Keyv(process.env.REDIS_URL, { namespace: 'items' });
@@ -135,7 +138,7 @@ async function agregarItemAInventario(key, item) {
         // LÓGICA DE OBJETO NORMAL: Añade el item a la lista
         const itemEnInventario = {
             nombre: item.nombre,
-            id: item.nombre.toLowerCase().replace(/ /g, '_'),
+            id: generarKeyLimpia(item.nombre), // Usar la función de limpieza
             tipo: item.tipo,
         };
         personaje.objetos.push(itemEnInventario);
@@ -226,6 +229,31 @@ async function getTupperAvatar(client, characterName, member) {
 
     // Si no lo encuentra, usa el avatar del usuario
     return fallbackAvatar;
+}
+
+/**
+ * ELIMINA TODOS los personajes (inventarios) de un usuario.
+ * Se usa para el comando !Zborrarpersonajes.
+ * @param {string} userId - La ID de Discord del usuario.
+ * @returns {Promise<number>} La cantidad de personajes eliminados.
+ */
+async function deleteAllPersonajes(userId) {
+    const keysToDelete = [];
+    const characterKeyPrefix = `${userId}:`;
+    let count = 0;
+
+    for await (const [key] of personajesDB.iterator()) {
+        if (key.startsWith(characterKeyPrefix)) {
+            keysToDelete.push(key);
+            count++;
+        }
+    }
+
+    for (const key of keysToDelete) {
+        await personajesDB.delete(key);
+    }
+
+    return count;
 }
 
 
@@ -341,6 +369,8 @@ async function manejarAsignacionCofre(userId, itemId, characterId, interaction) 
             // Título: ¡Has encontrado un/una [Nombre del Objeto]!
             .setTitle(`✨ ¡Has encontrado ${articulo} ${item.nombre}! ✨`)
             .setThumbnail(item.imagen)
+            // DESARROLLO: Usa el GIF principal de tesoro.
+            .setImage(LINK_TREASURE_GIF)
             // Descripción: Descripción del objeto ANTES de la confirmación
             .setDescription(`*${item.descripcion}*`);
 
@@ -531,6 +561,36 @@ client.on('interactionCreate', async interaction => {
         // Llamar a la función centralizada para manejar la asignación y el mensaje.
         return manejarAsignacionCofre(interaction.user.id, itemId, characterId, interaction);
     }
+    
+    // 5. Lógica de Confirmación de Borrado de Personajes
+    if (interaction.isButton() && interaction.customId.startsWith('confirm_delete_all_')) {
+        const userId = interaction.customId.replace('confirm_delete_all_', '');
+
+        if (interaction.user.id !== userId) {
+            return interaction.reply({ content: 'Solo el usuario que inició el proceso puede confirmar esto.', ephemeral: true });
+        }
+
+        await interaction.deferUpdate();
+        
+        // 1. Eliminar todos los personajes
+        const deletedCount = await deleteAllPersonajes(userId);
+        
+        // 2. Editar el mensaje original con la confirmación
+        const confirmationEmbed = new EmbedBuilder()
+            .setColor('#E82A2A')
+            .setTitle(`🗑️ Eliminación Masiva Confirmada`)
+            .setDescription(`Se han **eliminado permanentemente** **${deletedCount}** personajes (inventarios) vinculados a tu cuenta.`);
+        
+        // El mensaje original de confirmación se reemplaza
+        await interaction.message.edit({
+            content: `El proceso de borrado de inventarios ha finalizado.`,
+            embeds: [confirmationEmbed],
+            components: []
+        });
+
+        // Respuesta efímera para el usuario
+        return interaction.followUp({ content: `✅ ¡Todos tus personajes han sido eliminados!`, ephemeral: true });
+    }
 });
 
 client.on('messageCreate', async message => {
@@ -590,10 +650,11 @@ client.on('messageCreate', async message => {
         helpEmbed.addFields({
             name: '👤 Comandos Públicos (Personajes e Interacción)',
             value:
-                '`!Zcrearpersonaje <Nombre>`: Registra un nuevo personaje (Inicia con 0 Rupias).\n' +
-                '`!Zeliminarpersonaje <Nombre>`: Elimina uno de tus personajes y su inventario.\n' + // AÑADIDO
+                '`!Zcrearpersonaje <Nombre>`: Registra un nuevo personaje (Inicia con **100 Rupias**).\n' + // EDITADO
+                '`!Zeliminarpersonaje <Nombre>`: Elimina uno de tus personajes y su inventario.\n' +
+                '`!Zborrarpersonajes`: **¡PELIGRO!** Elimina *todos* tus personajes y sus inventarios.\n' + // NUEVO COMANDO
                 '`!Zinventario <Nombre>`: Muestra las rupias y objetos de tu personaje.\n' +
-                '`!Zpersonajes`: Lista todos tus personajes (ordenados por creación).\n' + // ORDENADO
+                '`!Zpersonajes`: Lista todos tus personajes (ordenados por creación).\n' +
                 '`!Zdaritem <Personaje> <Item> @Destino`: Transfiere un objeto de tu inventario.\n' +
                 '`!Zdarrupia_p <Personaje> @Destino <Cantidad>`: Transfiere Rupias a otro personaje.',
             inline: false
@@ -607,9 +668,9 @@ client.on('messageCreate', async message => {
                 '`!Zcrearitem "<Nombre>" "<Desc>" "<Tipo>" "<Imagen>" [ValorRupia]`\n' +
                 '`!Zeditaritem "<Nombre>" <campo> <nuevo_valor>`\n' +
                 '\n**Inventarios y Rupias:**\n' +
-                '`!Zdaritem_staff <Personaje> <Item> @Destino`: Asigna un objeto *desde el compendio*.\n' +
+                '`!Zdaritem <Personaje> <Item> @Destino`: Asigna un objeto *del compendio*.\n' +
                 '`!Zdarrupia @Usuario "Personaje" <Cantidad>`: Añade Rupias al personaje. **(Staff)**\n' +
-                '`!Zeliminarrupias @Usuario "Personaje" <cantidad|all>`: Quita Rupias. **(Staff)**\n' + // Usando el comando que proporcionaste
+                '`!Zeliminarrupias @Usuario "Personaje" <cantidad|all>`: Quita Rupias. **(Staff)**\n' +
                 '`!Zreiniciarinv <Personaje>`: Borra todo el inventario y rupias.\n' +
                 '\n**Cofres (Roleplay):**\n' +
                 '`!Zcrearcofre #canal <tipo> "<Item>"`: Crea un cofre con un objeto específico.',
@@ -618,9 +679,8 @@ client.on('messageCreate', async message => {
 
         helpEmbed.setFooter({ text: 'Los comandos Staff requieren el rol de Staff o permisos de Administrador.' });
 
-        // Nota: interaction.reply no está definido aquí, asumimos que quieres usar message.reply
-        return message.reply({ embeds: [helpEmbed], ephemeral: true }); 
-        return message.channel.send({ embeds: [helpEmbed] });
+        // Se usa message.channel.send ya que se asume que el comando es en un canal público.
+        return message.channel.send({ embeds: [helpEmbed] }); 
     }
 
     // --- COMANDO: CREAR ITEM (Staff) ---
@@ -796,7 +856,7 @@ client.on('messageCreate', async message => {
             nombre: nombrePersonaje,
             propietarioId: message.author.id, // Añadido para consistencia con migrarRupias
             propietarioTag: message.author.tag,
-            rupias: 0, // Inicia con 0 Rupias
+            rupias: 100, // <--- CAMBIO SOLICITADO: Inicia con 100 Rupias
             objetos: [],
             fechaRegistro: new Date().toLocaleDateString('es-ES'),
             createdAt: Date.now() // <--- ¡Añadido! Timestamp para ordenación
@@ -810,7 +870,7 @@ client.on('messageCreate', async message => {
             .setDescription(`Se ha creado un inventario y ha sido vinculado a tu ID de Discord.`)
             .addFields(
                 { name: 'Propietario', value: message.author.tag, inline: true },
-                { name: 'Inventario Inicial', value: 'Vacío (0 Objetos, 0 Rupias)', inline: true }
+                { name: 'Inventario Inicial', value: `100 Rupias y 0 Objetos`, inline: true } // MENSAJE AJUSTADO
             )
             .setFooter({ text: 'Ahora puedes recibir objetos en este personaje.' });
 
@@ -846,6 +906,50 @@ client.on('messageCreate', async message => {
             .setDescription(`El personaje **${nombrePersonaje}** ha sido **ELIMINADO** permanentemente de tu inventario. Se han borrado sus objetos y rupias.`);
 
         return message.channel.send({ embeds: [embed] });
+    }
+    
+    // --- NUEVO COMANDO: BORRAR TODOS LOS PERSONAJES (Público, con confirmación) ---
+    if (command === 'borrarpersonajes') {
+        const userId = message.author.id;
+        const characterKeyPrefix = `${userId}:`;
+        const allCharacters = [];
+
+        // 1. Recoger todos los personajes del usuario
+        for await (const [key, value] of personajesDB.iterator()) {
+            if (key.startsWith(characterKeyPrefix)) {
+                allCharacters.push(value.nombre);
+            }
+        }
+        
+        if (allCharacters.length === 0) {
+            return message.reply('No tienes ningún personaje (tupper) registrado para borrar.');
+        }
+
+        // 2. Crear el mensaje de advertencia y botones
+        const confirmEmbed = new EmbedBuilder()
+            .setColor('#FF0000')
+            .setTitle('⚠️ ¡ADVERTENCIA: BORRADO MASIVO! ⚠️')
+            .setDescription(`Estás a punto de **ELIMINAR PERMANENTEMENTE** todos tus ${allCharacters.length} personajes:\n\n` + 
+                            `**${allCharacters.join(', ')}**\n\n` +
+                            'Esta acción **no se puede deshacer** y perderás todos sus objetos y rupias.\n\n' + 
+                            '**Pulsa el botón de abajo para confirmar.**');
+
+        const confirmRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`confirm_delete_all_${userId}`)
+                .setLabel('CONFIRMAR ELIMINACIÓN TOTAL')
+                .setStyle(ButtonStyle.Danger),
+            new ButtonBuilder()
+                .setCustomId('cancel_delete_all')
+                .setLabel('Cancelar')
+                .setStyle(ButtonStyle.Secondary)
+        );
+
+        return message.reply({ 
+            content: `${message.author}, ¡Cuidado! Esta es una operación irreversible.`,
+            embeds: [confirmEmbed], 
+            components: [confirmRow] 
+        });
     }
 
     // --- COMANDO: VER INVENTARIO DEL PERSONAJE (Público) ---
@@ -1049,7 +1153,7 @@ client.on('messageCreate', async message => {
 
         message.channel.send({ embeds: [embed] });
     }
-
+    
     // --- COMANDO: DAR ITEM A PERSONAJE (Staff) ---
     if (command === 'daritem') {
         if (!hasAdminPerms) {
@@ -1067,7 +1171,7 @@ client.on('messageCreate', async message => {
         const nombrePersonaje = matches[0][1];
         const nombreItem = matches[1][1];
 
-        const itemId = nombreItem.toLowerCase().replace(/ /g, '_');
+        const itemId = generarKeyLimpia(nombreItem);
         const item = await compendioDB.get(itemId);
 
         if (!item) {
