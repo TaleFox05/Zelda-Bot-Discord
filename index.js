@@ -25,7 +25,6 @@ const PREFIX = '!Z';
 const ADMIN_ROLE_ID = "1420026299090731050"; 
 
 // Palabras clave para la gestión
-const CANCEL_EDIT_WORD = '!cancelar'; 
 const TIPOS_VALIDOS = ['moneda', 'objeto', 'keyitem']; 
 
 // DEFINICIÓN DE COFRES
@@ -44,12 +43,7 @@ const CHEST_TYPES = {
     }
 };
 
-// Almacén temporal para la edición. Guarda el ID del usuario y el ID del objeto que está editando.
-const edicionActiva = {};
-
 // --- ESTRUCTURA DE DATOS: KEYV (REDIS) ---
-// Keyv gestiona la conexión a la URL de Redis proporcionada por Railway (REDIS_URL)
-// ¡Asegúrate de que process.env.REDIS_URL esté configurada en tu archivo .env!
 const compendioDB = new Keyv(process.env.REDIS_URL, { namespace: 'items' }); 
 const enemigosDB = new Keyv(process.env.REDIS_URL, { namespace: 'enemies' }); 
 
@@ -67,7 +61,6 @@ const client = new Client({
 // === FUNCIONES ASÍNCRONAS DE DATOS ===
 // =========================================================================
 
-// Función de ayuda para obtener TODOS los datos de enemigos (para !Zlistarenemigos)
 async function obtenerTodosEnemigos() {
     const enemies = {};
     for await (const [key, value] of enemigosDB.iterator()) {
@@ -76,17 +69,22 @@ async function obtenerTodosEnemigos() {
     return Object.values(enemies);
 }
 
-// Función de ayuda para obtener TODOS los datos de ítems (para !Zlistaritems)
+// === MODIFICACIÓN: ORDENAR POR FECHA DE CREACIÓN ===
 async function obtenerTodosItems() {
     const items = {};
     for await (const [key, value] of compendioDB.iterator()) {
         items[key] = value;
     }
-    return Object.values(items);
+    const itemsArray = Object.values(items);
+    
+    // Si la propiedad existe, ordena por ella (ascendente = más antiguo primero)
+    itemsArray.sort((a, b) => (a.fechaCreacionMs || 0) - (b.fechaCreacionMs || 0));
+    
+    return itemsArray;
 }
 
 // =========================================================================
-// === LÓGICA DE PAGINACIÓN / EDICIÓN ===
+// === LÓGICA DE PAGINACIÓN / EMBEDS ===
 // =========================================================================
 
 function createPaginationRow(currentPage, totalPages) {
@@ -130,7 +128,6 @@ function createItemEmbedPage(items, pageIndex) {
     itemsToShow.forEach(p => {
         embed.addFields({
             name: `**${p.nombre}**`,
-            // ⚠️ Importante: Confirma que la propiedad es 'descripcion' (sin tilde)
             value: `**Descripción:** *${p.descripcion}*\n**Tipo:** ${p.tipo.toUpperCase()} | **Estado:** ${p.disponible ? 'Disponible' : 'En Posesión'}`,
             inline: false
         });
@@ -153,7 +150,6 @@ function createEnemyEmbedPage(enemies, pageIndex) {
         .setFooter({ text: `Página ${pageIndex + 1} de ${totalPages} | Consultado vía Zelda BOT | Usa los comandos de edición para modificar.` });
 
     enemiesToShow.forEach(e => {
-        // Corrección de Pluralización Aplicada: Muestra solo el HP base
         embed.addFields({
             name: `**${e.nombre}**`,
             value: `**HP Base:** ${e.hp}`,
@@ -164,56 +160,12 @@ function createEnemyEmbedPage(enemies, pageIndex) {
     return { embed, totalPages };
 }
 
-function createEditButtons(itemId) {
-    const row1 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId(`edit_nombre_${itemId}`)
-            .setLabel('✏️ Nombre')
-            .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-            .setCustomId(`edit_descripcion_${itemId}`)
-            .setLabel('📖 Descripción')
-            .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-            .setCustomId(`edit_tipo_${itemId}`)
-            .setLabel('🏷️ Tipo')
-            .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-            .setCustomId(`edit_imagen_${itemId}`)
-            .setLabel('🖼️ Imagen URL')
-            .setStyle(ButtonStyle.Secondary)
-    );
-    const row2 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId(`edit_cancel_${itemId}`)
-            .setLabel('❌ Cancelar Edición')
-            .setStyle(ButtonStyle.Danger)
-    );
-    return [row1, row2]; 
-}
-
-function createEditSelectionEmbed(item) {
-    return new EmbedBuilder()
-        .setColor(LIST_EMBED_COLOR)
-        .setTitle(`🛠️ Editando: ${item.nombre}`)
-        .setDescription(`Selecciona qué campo deseas modificar para el objeto **${item.nombre}**.\n\n*Elige uno de los botones de abajo o **Cancelar Edición**.*`)
-        .addFields(
-            // ⚠️ Importante: Confirma que la propiedad es 'descripcion' (sin tilde)
-            { name: 'Descripción Actual', value: item.descripcion.substring(0, 100) + (item.descripcion.length > 100 ? '...' : ''), inline: false },
-            { name: 'Tipo Actual', value: item.tipo.toUpperCase(), inline: true },
-            { name: 'Imagen Actual', value: item.imagen, inline: true }
-        )
-        // ⚠️ Importante: Confirma que la propiedad es 'imagen' (sin URL)
-        .setThumbnail(item.imagen);
-}
-
 
 // =========================================================================
-// === EVENTOS DEL BOT ===
+// === EVENTOS DEL BOT (Manejo de Interacciones/Mensajes) ===
 // =========================================================================
 
 client.on('ready', () => {
-    // Ya no es necesario cargar/guardar, Keyv lo hace.
     console.log(`¡Zelda BOT iniciado como ${client.user.tag}!`);
     client.user.setActivity('Gestionando el Compendio (DB Externa)');
 });
@@ -227,7 +179,10 @@ client.on('interactionCreate', async interaction => {
         const match = footerText.match(/Página (\d+) de (\d+)/);
         if (!match) return; 
         const currentPage = parseInt(match[1]) - 1; 
-        const items = await obtenerTodosItems(); // Obtenemos datos de la DB
+        
+        // Obtener ítems ORDENADOS
+        const items = await obtenerTodosItems(); 
+        
         if (items.length === 0) return interaction.update({ content: 'El compendio está vacío.' });
         const ITEMS_PER_PAGE = 5;
         const totalPages = Math.ceil(items.length / ITEMS_PER_PAGE);
@@ -244,57 +199,10 @@ client.on('interactionCreate', async interaction => {
         return; 
     }
     
-    // 2. Lógica de Edición 
-    if (interaction.isButton() && interaction.customId.startsWith('edit_')) {
-        if (!hasAdminPerms) {
-            return interaction.reply({ content: '¡Solo los Administradores Canon pueden usar las herramientas de edición!', ephemeral: true });
-        }
-        
-        const parts = interaction.customId.split('_');
-        const campo = parts[1];
-        const itemId = parts[2]; 
-        const item = await compendioDB.get(itemId); // Obtenemos el item de la DB
-        
-        if (!item) {
-            return interaction.reply({ content: 'El objeto que intentas editar ya no existe o el ID es incorrecto.', ephemeral: true });
-        }
-
-        if (campo === 'cancel') {
-            await interaction.update({ 
-                content: `❌ Edición de **${item.nombre}** cancelada por el Staff.`,
-                embeds: [],
-                components: []
-            });
-            return;
-        }
-
-        await interaction.deferReply({ ephemeral: true });
-        
-        let prompt;
-        if (campo === 'tipo') {
-            prompt = `Has elegido editar el **TIPO**.\n\n**Escribe el nuevo valor:**\nDebe ser uno de estos: \`${TIPOS_VALIDOS.join(', ')}\`\n\n*Para cancelar, escribe \`${CANCEL_EDIT_WORD}\`.*`;
-        } else if (campo === 'imagen') {
-            prompt = `Has elegido editar la **IMAGEN URL**.\n\n**Escribe la nueva URL** (debe empezar por http/https):\n\n*Para cancelar, escribe \`${CANCEL_EDIT_WORD}\`.*`;
-        } else {
-            prompt = `Has elegido editar el **${campo.toUpperCase()}**.\n\n**Escribe el nuevo valor:**\n\n*Para cancelar, escribe \`${CANCEL_EDIT_WORD}\`.*`;
-        }
-        
-        edicionActiva[interaction.user.id] = { 
-            itemId: itemId, 
-            campo: campo,
-            channelId: interaction.channelId
-        };
-
-        await interaction.followUp({ 
-            content: prompt, 
-            ephemeral: true 
-        });
-    }
-    
-    // 3. Lógica de Apertura de Cofre
+    // 2. Lógica de Apertura de Cofre
     if (interaction.isButton() && interaction.customId.startsWith('open_chest_')) {
         const itemId = interaction.customId.replace('open_chest_', '');
-        const item = await compendioDB.get(itemId); // Obtenemos el item de la DB
+        const item = await compendioDB.get(itemId); 
         
         if (interaction.message.components.length === 0 || interaction.message.components[0].components[0].disabled) {
             return interaction.reply({ content: 'Este cofre ya ha sido abierto.', ephemeral: true });
@@ -331,7 +239,7 @@ client.on('interactionCreate', async interaction => {
         });
     }
 
-    // 4. Lógica de Botones de Encuentro
+    // 3. Lógica de Botones de Encuentro
     if (interaction.isButton() && interaction.customId.startsWith('enemy_')) {
         const action = interaction.customId.split('_')[1];
         
@@ -364,73 +272,8 @@ client.on('messageCreate', async message => {
 
     const hasAdminPerms = message.member.roles.cache.has(ADMIN_ROLE_ID) || message.member.permissions.has(PermissionsBitField.Flags.Administrator);
 
-    // 1. Lógica de Respuesta de Edición 
-    const userId = message.author.id;
-    if (edicionActiva[userId] && edicionActiva[userId].channelId === message.channelId) {
-        
-        const { itemId, campo } = edicionActiva[userId];
-        const item = await compendioDB.get(itemId); // Obtenemos el item de la DB
-        const nuevoValor = message.content.trim();
-
-        if (nuevoValor.toLowerCase() === CANCEL_EDIT_WORD) {
-            delete edicionActiva[userId];
-            return message.reply(`❌ Proceso de edición de **${item ? item.nombre : 'item'}** cancelado por el Staff.`);
-        }
-        
-        if (!hasAdminPerms) {
-            delete edicionActiva[userId];
-            return message.reply({ content: 'No tienes permiso para responder a esta solicitud de edición.', ephemeral: true });
-        }
-        
-        if (!item) {
-            delete edicionActiva[userId];
-            return message.reply(`Error: El objeto con ID ${itemId} ya no existe.`);
-        }
-
-        if (campo === 'tipo' && !TIPOS_VALIDOS.includes(nuevoValor.toLowerCase())) {
-            return message.reply(`⚠️ **Valor Inválido:** El nuevo tipo debe ser uno de estos: \`${TIPOS_VALIDOS.join(', ')}\`. Inténtalo de nuevo en este mismo canal.`);
-        }
-        
-        let nuevoItemId = itemId;
-        if (campo === 'nombre') {
-            nuevoItemId = nuevoValor.toLowerCase().replace(/ /g, '_');
-            
-            const existingItem = await compendioDB.get(nuevoItemId);
-            if (existingItem && nuevoItemId !== itemId) {
-                return message.reply(`⚠️ **Nombre Existente:** Ya hay un objeto con el nombre **${nuevoValor}**. Usa un nombre diferente.`);
-            }
-            
-            // Si el nombre cambia, borramos el antiguo y guardamos el nuevo
-            await compendioDB.delete(itemId);
-            item.nombre = nuevoValor;
-            // ⚠️ IMPORTANTE: Si el nombre cambia, guardamos el item con la nueva clave (nuevoItemId)
-            await compendioDB.set(nuevoItemId, item);
-            
-        } else {
-            // Esto cubre 'descripcion', 'tipo', e 'imagen'
-            item[campo] = nuevoValor;
-            // ⚠️ IMPORTANTE: Guardamos con la clave original (itemId), ya que solo cambió una propiedad interna.
-            await compendioDB.set(itemId, item);
-        }
-
-        delete edicionActiva[userId];
-
-        const confirmEmbed = new EmbedBuilder()
-            .setColor(LIST_EMBED_COLOR)
-            .setTitle(`✅ Edición Completa`)
-            // ⚠️ Usamos el item.nombre actualizado si es el campo 'nombre', si no el original.
-            .setDescription(`El campo **${campo.toUpperCase()}** de **${item.nombre}** ha sido actualizado.`)
-            .addFields(
-                { name: `Nuevo Valor de ${campo.toUpperCase()}`, value: nuevoValor, inline: false }
-            )
-            .setThumbnail(item.imagen);
-        
-        message.reply({ embeds: [confirmEmbed] });
-        
-        return;
-    }
+    // --- ELIMINADA LÓGICA DE RESPUESTA DE EDICIÓN ---
     
-    // 2. Lógica de Comandos 
     if (!message.content.startsWith(PREFIX)) return;
 
     const fullCommand = message.content.slice(PREFIX.length).trim();
@@ -440,7 +283,6 @@ client.on('messageCreate', async message => {
     
     // --- COMANDO: HELP ---
     if (command === '-help') {
-        // (Este comando permanece igual)
         const helpEmbed = new EmbedBuilder()
             .setColor('#0099ff')
             .setTitle('📖 Guía de Comandos del Zelda BOT')
@@ -451,20 +293,18 @@ client.on('messageCreate', async message => {
                     value: [
                         `\`!Zcrearitem "Nombre" "Desc" "Tipo" "URL"\`: Registra un nuevo objeto.`,
                         `\`!Zeliminaritem "Nombre"\`: Borra un objeto.`,
-                        `\`!Zeditaritem "Nombre"\`: Inicia edición de objeto.`,
                         `\n**— Gestión de Encuentros —**`,
                         `\`!Zcrearenemigo "Nombre" "HP" "URL" ["Mensaje"] [pluralizar_nombre]\`: Registra un enemigo base.`,
                         `\`!Zeliminarenemigo "Nombre"\`: Borra un enemigo base.`, 
                         `\`!Zspawn <CanalID> "EnemigoNombre" [Cantidad] [sinbotones]\`: Hace aparecer enemigos.`,
                         `\`!Zcrearcofre <CanalID> "Tipo" "ItemNombre"\`: Crea un cofre.`,
-                        `*Comandos de edición en curso pueden cancelarse escribiendo \`${CANCEL_EDIT_WORD}\`*`
                     ].join('\n'),
                     inline: false
                 },
                 {
                     name: '🌎 Comandos de Consulta (Público)',
                     value: [
-                        `\`!Zlistaritems\`: Muestra el compendio de objetos.`,
+                        `\`!Zlistaritems\`: Muestra el compendio de objetos (ordenado por fecha de creación).`,
                         `\`!Zlistarenemigos\`: Muestra el compendio de monstruos.`, 
                         `\`!Zveritem "Nombre"\`: Muestra la ficha detallada de un objeto.`,
                         `\`!Z-help\`: Muestra esta guía de comandos.`
@@ -506,14 +346,18 @@ client.on('messageCreate', async message => {
             return message.reply(`¡El objeto **${nombre}** ya está registrado!`);
         }
 
+        const now = new Date();
         const newItem = {
             nombre: nombre,
             descripcion: descripcion,
             tipo: tipo,
             disponible: true, 
-            imagen: imagenUrl, // ⚠️ La clave es 'imagen'
+            imagen: imagenUrl, 
             registradoPor: message.author.tag,
-            fecha: new Date().toLocaleDateString('es-ES')
+            fecha: now.toLocaleDateString('es-ES'),
+            // === ADICIÓN PARA ORDENAMIENTO ===
+            fechaCreacionMs: now.getTime() 
+            // =================================
         };
         
         await compendioDB.set(id, newItem); // GUARDADO A LA DB
@@ -564,32 +408,7 @@ client.on('messageCreate', async message => {
         message.channel.send({ embeds: [embed] });
     }
 
-    // --- COMANDO: EDITAR ITEM (Staff) ---
-    if (command === 'editaritem') {
-        if (!hasAdminPerms) {
-            return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden editar objetos.');
-        }
-
-        const regex = /"([^"]+)"/; 
-        const match = fullCommand.match(regex);
-        
-        if (!match) {
-            return message.reply('Uso: `!Zeditaritem "Nombre Completo del Objeto"`');
-        }
-        
-        const nombreItem = match[1]; 
-        const itemId = nombreItem.toLowerCase().replace(/ /g, '_');
-        const item = await compendioDB.get(itemId);
-
-        if (!item) {
-            return message.reply(`No se encontró ningún objeto llamado **${nombreItem}** para editar.`);
-        }
-        
-        const embed = createEditSelectionEmbed(item);
-        const rows = createEditButtons(itemId); 
-        
-        message.channel.send({ embeds: [embed], components: rows });
-    }
+    // --- ELIMINADO COMANDO: EDITAR ITEM ---
 
     // --- COMANDO: VER ITEM (Público) ---
     if (command === 'veritem') { 
@@ -612,13 +431,11 @@ client.on('messageCreate', async message => {
             .setColor(LIST_EMBED_COLOR) 
             .setTitle(item.nombre) 
             .addFields(
-                // ⚠️ Confirma que la propiedad es 'descripcion' (sin tilde)
                 { name: 'Descripción', value: item.descripcion, inline: false },
                 { name: 'Tipo', value: item.tipo.toUpperCase(), inline: true },
                 { name: 'Estado', value: item.disponible ? 'Disponible' : 'En Posesión', inline: true },
                 { name: 'Fecha de Registro', value: item.fecha, inline: true }
             )
-            // ⚠️ Confirma que la propiedad es 'imagen' (sin URL)
             .setImage(item.imagen)
             .setFooter({ text: `Registrado por: ${item.registradoPor}` });
         
@@ -627,7 +444,8 @@ client.on('messageCreate', async message => {
     
     // --- COMANDO: LISTAR ITEMS (Público) ---
     if (command === 'listaritems') {
-        const items = await obtenerTodosItems(); // OBTENER DE LA DB
+        // OBTENER DE LA DB Y ORDENAR
+        const items = await obtenerTodosItems(); 
         
         if (items.length === 0) {
             return message.channel.send('***El Compendio de Objetos está vacío. ¡Que se registre el primer tesoro!***');
@@ -914,5 +732,5 @@ client.on('messageCreate', async message => {
         message.channel.send({ embeds: [embed] });
     }
 });
- 
+
 client.login(process.env.DISCORD_TOKEN);
