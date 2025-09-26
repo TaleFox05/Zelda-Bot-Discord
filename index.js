@@ -15,10 +15,10 @@ const Keyv = require('keyv');
 // =========================================================================
 
 // COLORES DE EMBEDS
-const LIST_EMBED_COLOR = '#427522';       // Compendio y General
-const ENEMY_EMBED_COLOR = '#E82A2A';      // Enemigos (Rojo)
-const TREASURE_EMBED_COLOR = '#634024';  // Cofres (Marrón)
-const REWARD_EMBED_COLOR = '#F7BD28';     // Recompensa de Cofre 
+const LIST_EMBED_COLOR = '#427522';       // Compendio y General
+const ENEMY_EMBED_COLOR = '#E82A2A';      // Enemigos (Rojo)
+const TREASURE_EMBED_COLOR = '#634024';  // Cofres (Marrón)
+const REWARD_EMBED_COLOR = '#F7BD28';     // Recompensa de Cofre 
 const PREFIX = '!Z';
 
 // ID del rol de Administrador que puede usar los comandos de Staff
@@ -46,7 +46,8 @@ const CHEST_TYPES = {
 // --- ESTRUCTURA DE DATOS: KEYV (REDIS) ---
 const compendioDB = new Keyv(process.env.REDIS_URL, { namespace: 'items' });
 const enemigosDB = new Keyv(process.env.REDIS_URL, { namespace: 'enemies' });
-const personajesDB = new Keyv(process.env.REDIS_URL, { namespace: 'personajes' });
+// NOTA: Usamos 'personajesDB' en el código, pero en la sección de crear personaje usaste 'db.set'. Lo unifico a 'personajesDB'.
+const personajesDB = new Keyv(process.env.REDIS_URL, { namespace: 'personajes' }); 
 
 // CONFIGURACIÓN DEL CLIENTE (EL BOT)
 const client = new Client({
@@ -123,7 +124,8 @@ async function agregarItemAInventario(key, item) {
         personaje.objetos = [];
     }
     if (!personaje.rupias) {
-        personaje.rupias = 0;
+        // Usa el nombre que estableciste en el objeto al crearlo
+        personaje.rupias = personaje.rupia || 0; 
     }
 
     if (item.tipo === 'moneda') {
@@ -441,7 +443,8 @@ client.on('interactionCreate', async interaction => {
 
         for await (const [key] of personajesDB.iterator()) {
             if (key.startsWith(characterKeyPrefix)) {
-                allCharacterKeys.push(key.split(':')[1].replace(/_/g, ' '));
+                // Obtener solo el nombre limpio del personaje desde la clave
+                allCharacterKeys.push(key.split(':')[1].replace(/_/g, ' ')); 
             }
         }
 
@@ -535,7 +538,9 @@ client.on('interactionCreate', async interaction => {
 client.on('messageCreate', async message => {
     if (message.author.bot) return;
 
-    const hasAdminPerms = message.member.roles.cache.has(ADMIN_ROLE_ID) || message.member.permissions.has(PermissionsBitField.Flags.Administrator);
+    // Nota: hasAdminPerms utiliza 'message.member.roles.cache.has' y 'message.member.permissions.has'.
+    // Esta verificación solo funciona en servidores.
+    const hasAdminPerms = message.member && (message.member.roles.cache.has(ADMIN_ROLE_ID) || message.member.permissions.has(PermissionsBitField.Flags.Administrator));
 
     if (!message.content.startsWith(PREFIX)) return;
 
@@ -555,8 +560,10 @@ client.on('messageCreate', async message => {
         helpEmbed.addFields({
             name: '👤 Comandos Públicos (Personajes e Interacción)',
             value:
-                '`!Zcrearpersonaje <Nombre>`: Registra un nuevo personaje (Inicia con 100 Rupias).\n' +
+                '`!Zcrearpersonaje <Nombre>`: Registra un nuevo personaje (Inicia con 0 Rupias).\n' +
+                '`!Zeliminarpersonaje <Nombre>`: Elimina uno de tus personajes y su inventario.\n' + // AÑADIDO
                 '`!Zinventario <Nombre>`: Muestra las rupias y objetos de tu personaje.\n' +
+                '`!Zpersonajes`: Lista todos tus personajes (ordenados por creación).\n' + // ORDENADO
                 '`!Zdaritem <Personaje> <Item> @Destino`: Transfiere un objeto de tu inventario.\n' +
                 '`!Zdarrupia_p <Personaje> @Destino <Cantidad>`: Transfiere Rupias a otro personaje.',
             inline: false
@@ -571,8 +578,8 @@ client.on('messageCreate', async message => {
                 '`!Zeditaritem "<Nombre>" <campo> <nuevo_valor>`\n' +
                 '\n**Inventarios y Rupias:**\n' +
                 '`!Zdaritem_staff <Personaje> <Item> @Destino`: Asigna un objeto *desde el compendio*.\n' +
-                '`!Zdarrupia <Personaje> @Usuario <Cantidad>`: Añade Rupias al personaje. **(Staff)**\n' +
-                '`!Zquitarrupia @Usuario <Cantidad> <Personaje>`: Quita Rupias.\n' +
+                '`!Zdarrupia @Usuario "Personaje" <Cantidad>`: Añade Rupias al personaje. **(Staff)**\n' +
+                '`!Zeliminarrupias @Usuario "Personaje" <cantidad|all>`: Quita Rupias. **(Staff)**\n' + // Usando el comando que proporcionaste
                 '`!Zreiniciarinv <Personaje>`: Borra todo el inventario y rupias.\n' +
                 '\n**Cofres (Roleplay):**\n' +
                 '`!Zcrearcofre #canal <tipo> "<Item>"`: Crea un cofre con un objeto específico.',
@@ -581,7 +588,8 @@ client.on('messageCreate', async message => {
 
         helpEmbed.setFooter({ text: 'Los comandos Staff requieren el rol de Staff o permisos de Administrador.' });
 
-        return interaction.reply({ embeds: [helpEmbed], ephemeral: true });
+        // Nota: interaction.reply no está definido aquí, asumimos que quieres usar message.reply
+        return message.reply({ embeds: [helpEmbed], ephemeral: true }); 
     }
 
     // --- COMANDO: CREAR ITEM (Staff) ---
@@ -619,7 +627,7 @@ client.on('messageCreate', async message => {
             }
         }
 
-        const id = nombre.toLowerCase().replace(/ /g, '_');
+        const id = generarKeyLimpia(nombre);
 
         const existingItem = await compendioDB.get(id);
         if (existingItem) {
@@ -737,14 +745,6 @@ client.on('messageCreate', async message => {
 
     // --- COMANDO: CREAR PERSONAJE/TUPPER (Público) ---
     if (command === 'crearpersonaje') {
-        const personajeData = {
-            //...
-            rupia: 100,
-            objetos: [],
-        };
-
-        await db.set(personajeKey, personajeData);
-
         const regex = /"([^"]+)"/;
         const match = fullCommand.match(regex);
 
@@ -761,16 +761,17 @@ client.on('messageCreate', async message => {
             return message.reply(`¡Ya tienes un inventario registrado para el personaje **${nombrePersonaje}**!`);
         }
 
-        const nuevoInventario = {
+        const personajeData = {
             nombre: nombrePersonaje,
-            propietarioId: message.author.id,
+            propietarioId: message.author.id, // Añadido para consistencia con migrarRupias
             propietarioTag: message.author.tag,
+            rupias: 0, // Inicia con 0 Rupias
             objetos: [],
-            rupias: 0,
-            fechaRegistro: new Date().toLocaleDateString('es-ES')
+            fechaRegistro: new Date().toLocaleDateString('es-ES'),
+            createdAt: Date.now() // <--- ¡Añadido! Timestamp para ordenación
         };
 
-        await personajesDB.set(personajeKey, nuevoInventario);
+        await personajesDB.set(personajeKey, personajeData); // Usando personajesDB
 
         const embed = new EmbedBuilder()
             .setColor(LIST_EMBED_COLOR)
@@ -783,6 +784,37 @@ client.on('messageCreate', async message => {
             .setFooter({ text: 'Ahora puedes recibir objetos en este personaje.' });
 
         message.channel.send({ embeds: [embed] });
+    }
+    
+    // --- NUEVO COMANDO: ELIMINAR PERSONAJE (Público) ---
+    if (command === 'eliminarpersonaje') {
+        // Se deja sin verificación de Staff para que cada usuario pueda eliminar sus tuppers.
+
+        const regex = /"([^"]+)"/;
+        const match = fullCommand.match(regex);
+
+        if (!match) {
+            return message.reply('Uso: `!Zeliminarpersonaje "Nombre del Tupper"` (Debe ser el nombre exacto de tu personaje).');
+        }
+
+        const nombrePersonaje = match[1];
+        const personajeKey = generarPersonajeKey(message.author.id, nombrePersonaje);
+
+        const exists = await personajesDB.get(personajeKey);
+
+        if (!exists) {
+            return message.reply(`Error: No se encontró ningún personaje llamado **${nombrePersonaje}** vinculado a tu cuenta.`);
+        }
+
+        // ELIMINAR la entrada de la base de datos
+        await personajesDB.delete(personajeKey);
+
+        const embed = new EmbedBuilder()
+            .setColor('#E82A2A')
+            .setTitle(`🗑️ Personaje Eliminado`)
+            .setDescription(`El personaje **${nombrePersonaje}** ha sido **ELIMINADO** permanentemente de tu inventario. Se han borrado sus objetos y rupias.`);
+
+        return message.channel.send({ embeds: [embed] });
     }
 
     // --- COMANDO: VER INVENTARIO DEL PERSONAJE (Público) ---
@@ -850,6 +882,7 @@ client.on('messageCreate', async message => {
         const characterKeyPrefix = `${message.author.id}:`;
         const allCharacters = [];
 
+        // 1. Recoger todos los personajes del usuario
         for await (const [key, value] of personajesDB.iterator()) {
             if (key.startsWith(characterKeyPrefix)) {
                 allCharacters.push(value);
@@ -860,13 +893,21 @@ client.on('messageCreate', async message => {
             return message.reply('No tienes ningún personaje (tupper) registrado. Usa `!Zcrearpersonaje "Nombre"` para crear uno.');
         }
 
-        const characterList = allCharacters.map(char => `• **${char.nombre}** - ${char.objetos.length} objetos, ${char.rupias} rupias.`).join('\n');
+        // 2. ORDENAR por el timestamp de creación (más antiguo primero)
+        // Usamos (p.createdAt || 0) por si hay personajes creados antes del cambio.
+        allCharacters.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+
+        // 3. Generar la lista con el nuevo orden
+        const characterList = allCharacters.map((char, index) => 
+            `**${index + 1}. ${char.nombre}** - ${char.objetos.length} objetos, ${char.rupias} rupias.`
+        ).join('\n');
+
 
         const embed = new EmbedBuilder()
             .setColor(LIST_EMBED_COLOR)
             .setTitle(`👤 Personajes de ${message.author.tag}`)
             .setDescription(characterList)
-            .setFooter({ text: `Total de personajes: ${allCharacters.length}` });
+            .setFooter({ text: `Total de personajes: ${allCharacters.length} | Ordenados por antigüedad` });
 
         message.channel.send({ embeds: [embed] });
     }
@@ -906,37 +947,6 @@ client.on('messageCreate', async message => {
             .setFooter({ text: 'No se puede deshacer esta acción.' });
 
         message.channel.send({ embeds: [embed] });
-    }
-
-    // Comando !Zdarrupia (Staff)
-    if (command === 'darrupia') {
-        // 1. Verificar permisos (Staff)
-        if (!esStaff(interaction.member)) {
-            return interaction.reply({ content: 'Solo el Staff puede usar este comando.', ephemeral: true });
-        }
-
-        const [nombrePersonaje, targetMention, cantidadStr] = args;
-        const targetUser = interaction.client.users.cache.get(targetMention.replace(/[<@!>]/g, ''));
-        const cantidad = parseInt(cantidadStr);
-
-        if (!targetUser || isNaN(cantidad) || cantidad <= 0 || !nombrePersonaje) {
-            return interaction.reply({ content: 'Uso: `!Zdarrupia <NombrePersonaje> @Usuario <Cantidad>` (la cantidad debe ser positiva).', ephemeral: true });
-        }
-
-        const targetKey = generarPersonajeKey(targetUser.id, nombrePersonaje);
-        let personajeData = await db.get(targetKey);
-
-        if (!personajeData) {
-            return interaction.reply({ content: `Error: No se encontró al personaje **${nombrePersonaje}** para ${targetUser.username}.`, ephemeral: true });
-        }
-
-        personajeData.rupia = (personajeData.rupia || 0) + cantidad;
-        await db.set(targetKey, personajeData);
-
-        return interaction.reply({
-            content: `**[Staff]** Se han añadido **${cantidad}** rupias al personaje **${nombrePersonaje}** de ${targetUser.username}. Rupias totales: ${personajeData.rupia}.`,
-            ephemeral: false
-        });
     }
 
     // --- NUEVO COMANDO: ELIMINAR RUPIAS DE PERSONAJE (Staff) ---
@@ -1009,7 +1019,7 @@ client.on('messageCreate', async message => {
         message.channel.send({ embeds: [embed] });
     }
 
-    // --- COMANDO: DAR ITEM A PERSONAJE (Staff) - MODIFICADO ---
+    // --- COMANDO: DAR ITEM A PERSONAJE (Staff) ---
     if (command === 'daritem') {
         if (!hasAdminPerms) {
             return message.reply('¡Solo los Administradores Canon pueden dar objetos directamente!');
@@ -1032,9 +1042,9 @@ client.on('messageCreate', async message => {
         if (!item) {
             return message.reply(`El objeto **${nombreItem}** no se encontró en el compendio.`);
         }
-
+        
         const personajeKey = generarPersonajeKey(targetUser.id, nombrePersonaje);
-
+        
         const success = await agregarItemAInventario(personajeKey, item);
 
         if (!success) {
@@ -1053,6 +1063,48 @@ client.on('messageCreate', async message => {
 
         message.channel.send({ content: `${targetUser}`, embeds: [embed] });
     }
+
+    // --- COMANDO: DAR RUPIAS A PERSONAJE (Staff) ---
+    if (command === 'darrupia') {
+        if (!hasAdminPerms) {
+            return message.reply('¡Solo los Administradores Canon pueden dar rupias directamente!');
+        }
+
+        const regex = /"([^"]+)"/g;
+        const matches = [...message.content.matchAll(regex)];
+        const targetUser = message.mentions.users.first();
+
+        // Extraer la cantidad del final de los argumentos (no está entre comillas)
+        const cantidadStr = args[args.length - 1];
+        const cantidad = parseInt(cantidadStr);
+
+        if (!targetUser || matches.length < 1 || isNaN(cantidad) || cantidad <= 0) {
+            return message.reply('Uso: `!Zdarrupia @Usuario "NombrePersonaje" <Cantidad>` (la cantidad debe ser positiva).');
+        }
+
+        const nombrePersonaje = matches[0][1];
+        const personajeKey = generarPersonajeKey(targetUser.id, nombrePersonaje);
+        let personaje = await personajesDB.get(personajeKey);
+
+        if (!personaje) {
+            return message.reply(`Error: No se encontró al personaje **${nombrePersonaje}** para ${targetUser}.`);
+        }
+
+        personaje.rupias = (personaje.rupias || 0) + cantidad;
+        await personajesDB.set(personajeKey, personaje);
+
+        const embed = new EmbedBuilder()
+            .setColor(REWARD_EMBED_COLOR)
+            .setTitle(`💰 Rupias Añadidas`)
+            .setDescription(`Se han añadido **${cantidad}** rupias al personaje **${personaje.nombre}**.`)
+            .addFields(
+                { name: 'Propietario', value: targetUser.tag, inline: true },
+                { name: 'Rupias Totales', value: personaje.rupias.toString(), inline: true }
+            );
+
+        message.channel.send({ content: `**[Staff]** Transferencia realizada.`, embeds: [embed] });
+    }
+
 
     // --- COMANDO: CREAR ENEMIGO (Staff) ---
     if (command === 'crearenemigo') {
@@ -1132,7 +1184,7 @@ client.on('messageCreate', async message => {
         }
 
         const nombreEnemigo = match[1];
-        const id = nombreEnemigo.toLowerCase().replace(/ /g, '_');
+        const id = generarKeyLimpia(nombreEnemigo);
 
         const enemigoEliminado = await enemigosDB.get(id);
         if (!enemigoEliminado) {
@@ -1199,7 +1251,7 @@ client.on('messageCreate', async message => {
             return message.reply('Sintaxis incorrecta. Debes especificar el nombre del enemigo.');
         }
 
-        const enemigoId = nombreEnemigo.toLowerCase().replace(/ /g, '_');
+        const enemigoId = generarKeyLimpia(nombreEnemigo);
         const enemigoBase = await enemigosDB.get(enemigoId);
 
         if (!enemigoBase) {
@@ -1279,7 +1331,7 @@ client.on('messageCreate', async message => {
 
         const tipoCofre = matches[0][1].toLowerCase();
         const nombreItem = matches[1][1];
-        const itemId = nombreItem.toLowerCase().replace(/ /g, '_');
+        const itemId = generarKeyLimpia(nombreItem);
 
         const cofre = CHEST_TYPES[tipoCofre];
         const item = await compendioDB.get(itemId);
