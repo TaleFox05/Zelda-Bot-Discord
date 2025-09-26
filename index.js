@@ -428,7 +428,7 @@ client.on('interactionCreate', async interaction => {
         return;
     }
 
-    // 4. Lógica de Asignación por Select (cuando se pulsa el dropdown) - CORREGIDO EXTRACCIÓN DE ITEM ID
+    // 4. Lógica de Asignación por Select (cuando se pulsa el dropdown) - CORRECCIÓN DEFINITIVA DE EXTRACCIÓN
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('assign_item_')) {
         // Deferir para evitar "Interacción Fallida"
         await interaction.deferUpdate({ ephemeral: false });
@@ -437,13 +437,15 @@ client.on('interactionCreate', async interaction => {
         // parts[2] contiene "itemId-tipoCofre" o simplemente "itemId"
         const fullItemIdAndChest = parts[2];
 
-        // **CORRECCIÓN CLAVE:** Extraer solo la parte del ID antes del primer guion (si existe)
-        const itemId = fullItemIdAndChest.split('-')[0];
+        // **CORRECCIÓN CLAVE:** El ID del objeto es siempre la parte ANTES del primer guion.
+        const itemId = fullItemIdAndChest.split('-')[0]; // Esto DEBE dar 'rupia_azul' o 'poción_roja'
 
         const characterId = interaction.values[0];
 
         const characterKey = generarPersonajeKey(interaction.user.id, characterId);
-        const item = await compendioDB.get(itemId); // Ahora busca 'rupia_azul' y no 'rupia_azul-pequeño'
+
+        // Obtener el objeto base (compendioDB busca por el ID limpio: 'rupia_azul')
+        const item = await compendioDB.get(itemId);
 
         if (!item) {
             // Mensaje de error más descriptivo
@@ -455,7 +457,8 @@ client.on('interactionCreate', async interaction => {
             return interaction.followUp({ content: 'Esta asignación es solo para el usuario que abrió el cofre.', ephemeral: true });
         }
 
-        // --- LÓGICA CRÍTICA: AÑADIR ITEM AL INVENTARIO (incluye Rupias) ---
+        // --- LÓGICA CRÍTICA: AÑADIR ITEM AL INVENTARIO ---
+        // Esta función maneja automáticamente si es 'moneda' (suma rupias) o 'objeto' (añade a lista).
         const success = await agregarItemAInventario(characterKey, item);
 
         if (success) {
@@ -464,7 +467,7 @@ client.on('interactionCreate', async interaction => {
 
             const characterName = characterId.replace(/_/g, ' ');
 
-            // Determinar si es un artículo o una moneda
+            // Determinar si es un artículo o una moneda para el mensaje de UX
             const isMoneda = item.tipo === 'moneda';
             const articulo = isMoneda ? 'una' : 'un';
 
@@ -476,16 +479,16 @@ client.on('interactionCreate', async interaction => {
                 // Descripción: Descripción del objeto ANTES de la confirmación
                 .setDescription(`*${item.descripcion}*`);
 
-            // Añadir campo de confirmación
+            // Añadir campo de confirmación (Diferenciación de Rupias/Objeto)
             if (isMoneda) {
-                // Moneda
+                // Moneda (Suma)
                 rewardEmbed.addFields({
                     name: 'Asignación de Rupias',
                     value: `Se han añadido **${item.valorRupia}** rupias a la cuenta de **${characterName}**.`,
                     inline: false
                 });
             } else {
-                // Objeto Normal
+                // Objeto Normal (Añade a lista)
                 rewardEmbed.addFields({
                     name: 'Asignación de Objeto',
                     value: `**${item.nombre}** ha sido añadido al inventario de **${characterName}** (Tupper de ${interaction.user.username}).`,
