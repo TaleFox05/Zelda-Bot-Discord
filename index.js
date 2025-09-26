@@ -2,8 +2,8 @@
 require('dotenv').config();
 
 // Importa las clases necesarias de discord.js
-const { 
-    Client, GatewayIntentBits, PermissionsBitField, EmbedBuilder, 
+const {
+    Client, GatewayIntentBits, PermissionsBitField, EmbedBuilder,
     ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder
 } = require('discord.js');
 
@@ -19,43 +19,43 @@ const LIST_EMBED_COLOR = '#427522';       // Compendio y General
 const ENEMY_EMBED_COLOR = '#E82A2A';      // Enemigos (Rojo)
 const TREASURE_EMBED_COLOR = '#634024';  // Cofres (Marrón)
 const REWARD_EMBED_COLOR = '#F7BD28';     // Recompensa de Cofre 
-const PREFIX = '!Z'; 
+const PREFIX = '!Z';
 
 // ID del rol de Administrador que puede usar los comandos de Staff
-const ADMIN_ROLE_ID = "1420026299090731050"; 
+const ADMIN_ROLE_ID = "1420026299090731050";
 
 // Palabras clave para la gestión
-const TIPOS_VALIDOS = ['moneda', 'objeto', 'keyitem']; 
+const TIPOS_VALIDOS = ['moneda', 'objeto', 'keyitem'];
 
 // DEFINICIÓN DE COFRES
 const CHEST_TYPES = {
-    pequeño: { 
-        nombre: 'Cofre Pequeño', 
+    pequeño: {
+        nombre: 'Cofre Pequeño',
         img: 'https://i.imgur.com/O6wo7s4.png'
     },
-    grande: { 
-        nombre: 'Cofre de Mazmorra', 
+    grande: {
+        nombre: 'Cofre de Mazmorra',
         img: 'https://static.wikia.nocookie.net/zelda_gamepedia_en/images/0/0f/MM3D_Chest.png/revision/latest/scale-to-width/360?cb=20201125233413'
     },
-    jefe: { 
-        nombre: 'Cofre de Llave Maestra', 
+    jefe: {
+        nombre: 'Cofre de Llave Maestra',
         img: 'https://frommetolu.wordpress.com/wp-content/uploads/2012/01/treasure_chest_n64.png'
     }
 };
 
 // --- ESTRUCTURA DE DATOS: KEYV (REDIS) ---
-const compendioDB = new Keyv(process.env.REDIS_URL, { namespace: 'items' }); 
-const enemigosDB = new Keyv(process.env.REDIS_URL, { namespace: 'enemies' }); 
-const personajesDB = new Keyv(process.env.REDIS_URL, { namespace: 'personajes' }); 
+const compendioDB = new Keyv(process.env.REDIS_URL, { namespace: 'items' });
+const enemigosDB = new Keyv(process.env.REDIS_URL, { namespace: 'enemies' });
+const personajesDB = new Keyv(process.env.REDIS_URL, { namespace: 'personajes' });
 
 // CONFIGURACIÓN DEL CLIENTE (EL BOT)
-const client = new Client({ 
+const client = new Client({
     intents: [
-        GatewayIntentBits.Guilds,       
-        GatewayIntentBits.GuildMessages,    
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMessageReactions,
-    ] 
+    ]
 });
 
 // =========================================================================
@@ -76,9 +76,9 @@ async function obtenerTodosItems() {
         items[key] = value;
     }
     const itemsArray = Object.values(items);
-    
+
     itemsArray.sort((a, b) => (a.fechaCreacionMs || 0) - (b.fechaCreacionMs || 0));
-    
+
     return itemsArray;
 }
 
@@ -101,7 +101,7 @@ function generarPersonajeKey(userId, nombrePersonaje) {
  */
 async function agregarItemAInventario(key, item) {
     let personaje = await personajesDB.get(key);
-    
+
     if (!personaje) {
         return false;
     }
@@ -112,10 +112,10 @@ async function agregarItemAInventario(key, item) {
     if (!personaje.rupias) {
         personaje.rupias = 0;
     }
-    
+
     if (item.tipo === 'moneda') {
         // LÓGICA DE MONEDA: Suma el valor al contador de rupias
-        personaje.rupias += (item.valorRupia || 1); 
+        personaje.rupias += (item.valorRupia || 1);
     } else {
         // LÓGICA DE OBJETO NORMAL: Añade el item a la lista
         const itemEnInventario = {
@@ -140,7 +140,7 @@ async function migrarRupias(personaje) {
     if (!personaje || !personaje.objetos || !personaje.propietarioId || !personaje.nombre) {
         return false;
     }
-    
+
     let itemsNoMoneda = [];
     let cambiosRealizados = false;
 
@@ -149,7 +149,7 @@ async function migrarRupias(personaje) {
     for await (const [key, value] of compendioDB.iterator()) {
         compendioItems[key] = value;
     }
-    
+
     for (const item of personaje.objetos) {
         const itemBase = compendioItems[item.id];
 
@@ -162,7 +162,7 @@ async function migrarRupias(personaje) {
             itemsNoMoneda.push(item);
         }
     }
-    
+
     if (cambiosRealizados) {
         personaje.objetos = itemsNoMoneda; // Reemplazar con la lista filtrada
         const personajeKey = generarPersonajeKey(personaje.propietarioId, personaje.nombre);
@@ -173,34 +173,43 @@ async function migrarRupias(personaje) {
 }
 
 /**
- * Intenta obtener la URL del avatar de un Tupper buscando en mensajes recientes.
- * Si falla, devuelve la URL del avatar del usuario de Discord.
+ * Intenta obtener la URL del avatar de un Tupper (Webhook/APP) buscando en mensajes recientes.
  * @param {Client} client - El cliente de Discord.
  * @param {string} characterName - El nombre del personaje (Tupper).
  * @param {GuildMember} member - El miembro de Discord que ejecuta el comando.
  * @returns {Promise<string>} La URL del avatar.
  */
 async function getTupperAvatar(client, characterName, member) {
+    // Si la foto del usuario es el fallback
     const fallbackAvatar = member.user.displayAvatarURL({ dynamic: true });
 
+    // Si el usuario no tiene un mensaje reciente, no podemos buscar el canal
+    if (!member.lastMessage || !member.lastMessage.channelId) {
+        return fallbackAvatar;
+    }
+
     try {
-        const lastChannel = member.guild.channels.cache.get(member.lastMessage.channelId);
-        if (!lastChannel) return fallbackAvatar;
+        // Busca en los últimos 50 mensajes del canal donde el usuario interactuó
+        const channel = member.guild.channels.cache.get(member.lastMessage.channelId);
+        if (!channel) return fallbackAvatar;
 
-        const messages = await lastChannel.messages.fetch({ limit: 50 });
+        const messages = await channel.messages.fetch({ limit: 50 });
 
-        const tupperMessage = messages.find(msg => 
-            msg.webhookId && 
-            msg.author.username.toLowerCase() === characterName.toLowerCase()
+        // Buscamos un mensaje que sea de un Webhook/App (Tupper)
+        const tupperMessage = messages.find(msg =>
+            msg.webhookId &&
+            msg.author.username.toLowerCase() === characterName.toLowerCase() // El webhook usa el nombre del tupper como username
         );
 
         if (tupperMessage && tupperMessage.author.avatarURL) {
+            // El bot detectó la foto del webhook del tupper
             return tupperMessage.author.avatarURL({ dynamic: true });
         }
     } catch (error) {
         // console.error(`Error buscando avatar de Tupper ${characterName}:`, error.message);
     }
 
+    // Si no lo encuentra, usa el avatar del usuario
     return fallbackAvatar;
 }
 
@@ -213,22 +222,22 @@ function createPaginationRow(currentPage, totalPages) {
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId('first')
-            .setEmoji('⏮️') 
+            .setEmoji('⏮️')
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(currentPage === 0),
         new ButtonBuilder()
             .setCustomId('prev')
-            .setEmoji('◀️') 
+            .setEmoji('◀️')
             .setStyle(ButtonStyle.Primary)
             .setDisabled(currentPage === 0),
         new ButtonBuilder()
             .setCustomId('next')
-            .setEmoji('▶️') 
+            .setEmoji('▶️')
             .setStyle(ButtonStyle.Primary)
             .setDisabled(currentPage === totalPages - 1),
         new ButtonBuilder()
             .setCustomId('last')
-            .setEmoji('⏭️') 
+            .setEmoji('⏭️')
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(currentPage === totalPages - 1)
     );
@@ -242,7 +251,7 @@ function createItemEmbedPage(items, pageIndex) {
     const totalPages = Math.ceil(items.length / ITEMS_PER_PAGE);
 
     const embed = new EmbedBuilder()
-        .setColor(LIST_EMBED_COLOR) 
+        .setColor(LIST_EMBED_COLOR)
         .setTitle('🏰 Compendio de Objetos de Nuevo Hyrule 🏰')
         .setDescription(`*Página ${pageIndex + 1} de ${totalPages}. Solo se muestran ${ITEMS_PER_PAGE} objetos por página.*`)
         .setFooter({ text: `Página ${pageIndex + 1} de ${totalPages} | Consultado vía Zelda BOT | Usa los botones para navegar.` });
@@ -266,10 +275,10 @@ function createEnemyEmbedPage(enemies, pageIndex) {
     const totalPages = Math.ceil(enemies.length / ENEMIES_PER_PAGE);
 
     const embed = new EmbedBuilder()
-        .setColor(ENEMY_EMBED_COLOR) 
+        .setColor(ENEMY_EMBED_COLOR)
         .setTitle('👹 Compendio de Monstruos de Nuevo Hyrule ⚔️')
-        .setDescription(`*Página ${pageIndex + 1} de ${totalPages}. Solo se muestran ${ENEMIES_PER_PAGE} enemigos por página.*`) 
-        .setFooter({ text: `Página ${pageIndex + 1} de ${totalPages} | Consultado vía Zelda BOT | Usa los botones para navegar.` }); 
+        .setDescription(`*Página ${pageIndex + 1} de ${totalPages}. Solo se muestran ${ENEMIES_PER_PAGE} enemigos por página.*`)
+        .setFooter({ text: `Página ${pageIndex + 1} de ${totalPages} | Consultado vía Zelda BOT | Usa los botones para navegar.` });
 
     enemiesToShow.forEach(e => {
         embed.addFields({
@@ -295,17 +304,17 @@ client.on('ready', () => {
 client.on('interactionCreate', async interaction => {
     // 1. Lógica de Paginación (Objetos y Enemigos unificados)
     if (interaction.isButton() && ['first', 'prev', 'next', 'last'].includes(interaction.customId)) {
-        
+
         const footerText = interaction.message.embeds[0].footer.text;
         const embedTitle = interaction.message.embeds[0].title;
         const match = footerText.match(/Página (\d+) de (\d+)/);
-        
-        if (!match) return; 
-        const currentPage = parseInt(match[1]) - 1; 
-        
+
+        if (!match) return;
+        const currentPage = parseInt(match[1]) - 1;
+
         let dataArray = [];
         let createEmbedFunc;
-        let ITEMS_PER_PAGE = 5; 
+        let ITEMS_PER_PAGE = 5;
 
         if (embedTitle.includes('Objetos')) {
             dataArray = await obtenerTodosItems();
@@ -316,12 +325,12 @@ client.on('interactionCreate', async interaction => {
             createEmbedFunc = createEnemyEmbedPage;
             if (dataArray.length === 0) return interaction.update({ content: 'El compendio de monstruos está vacío.' });
         } else {
-            return; 
+            return;
         }
-        
+
         const totalPages = Math.ceil(dataArray.length / ITEMS_PER_PAGE);
         let newPage = currentPage;
-        
+
         switch (interaction.customId) {
             case 'first': newPage = 0; break;
             case 'prev': newPage = Math.max(0, currentPage - 1); break;
@@ -331,15 +340,15 @@ client.on('interactionCreate', async interaction => {
 
         const { embed: newEmbed } = createEmbedFunc(dataArray, newPage);
         const newRow = createPaginationRow(newPage, totalPages);
-        await interaction.update({ embeds: [newEmbed], components: [newRow] }); 
-        return; 
+        await interaction.update({ embeds: [newEmbed], components: [newRow] });
+        return;
     }
-    
+
     // 2. Lógica de Apertura de Cofre
     if (interaction.isButton() && interaction.customId.startsWith('open_chest_')) {
         const itemId = interaction.customId.replace('open_chest_', '');
-        const item = await compendioDB.get(itemId); 
-        
+        const item = await compendioDB.get(itemId);
+
         if (interaction.message.components.length === 0 || interaction.message.components[0].components[0].disabled) {
             return interaction.reply({ content: 'Este cofre ya ha sido abierto.', ephemeral: true });
         }
@@ -347,7 +356,7 @@ client.on('interactionCreate', async interaction => {
         if (!item) {
             return interaction.reply({ content: 'El tesoro no se encontró en el compendio. Notifica al Staff.', ephemeral: true });
         }
-        
+
         const characterKeyPrefix = `${interaction.user.id}:`;
         const allCharacterKeys = [];
 
@@ -358,14 +367,14 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (allCharacterKeys.length === 0) {
-             return interaction.reply({ content: 'No tienes personajes (tuppers) registrados para recibir este objeto. Usa `!Zcrearpersonaje "Nombre"` primero.', ephemeral: true });
+            return interaction.reply({ content: 'No tienes personajes (tuppers) registrados para recibir este objeto. Usa `!Zcrearpersonaje "Nombre"` primero.', ephemeral: true });
         }
 
         const disabledRow = new ActionRowBuilder().addComponents(
             ButtonBuilder.from(interaction.message.components[0].components[0]).setDisabled(true)
         );
-        await interaction.update({ components: [disabledRow] }); 
-        
+        await interaction.update({ components: [disabledRow] });
+
         const options = allCharacterKeys.map(name => ({
             label: name,
             value: name.toLowerCase().replace(/ /g, '_')
@@ -383,29 +392,29 @@ client.on('interactionCreate', async interaction => {
             components: [selectRow]
         });
 
-        return; 
+        return;
     }
 
     // 3. Lógica de Botones de Encuentro (sin cambios)
     if (interaction.isButton() && interaction.customId.startsWith('enemy_')) {
         const action = interaction.customId.split('_')[1];
-        
+
         if (action === 'accept') {
             await interaction.reply({ content: `**${interaction.user.username}** acepta el combate contra ${interaction.message.embeds[0].title.replace('⚔️ ¡ALERTA! ', '')}. ¡Que comience la batalla!`, ephemeral: false });
 
             const editedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
-                .setFooter(null) 
+                .setFooter(null)
                 .setDescription(interaction.message.embeds[0].description + `\n\n_El combate ha sido aceptado por ${interaction.user.username}._`);
 
-            await interaction.message.edit({ 
-                embeds: [editedEmbed], 
-                components: [] 
+            await interaction.message.edit({
+                embeds: [editedEmbed],
+                components: []
             });
 
 
         } else if (action === 'deny') {
             const enemyName = interaction.message.embeds[0].title.replace('⚔️ ¡ALERTA! Enemigo(s) a la vista: ', '').replace(/!$/, '');
-            
+
             await interaction.message.delete();
 
             await interaction.channel.send(`✨ **${interaction.user.username}** ha decidido evitar el encuentro. ¡Los ${enemyName} se han marchado!`);
@@ -415,46 +424,52 @@ client.on('interactionCreate', async interaction => {
 
     // 4. Lógica de Asignación por Select (cuando se pulsa el dropdown)
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('assign_item_')) {
+        // Deferir para evitar "Interacción Fallida"
+        await interaction.deferUpdate({ ephemeral: false });
+
         const parts = interaction.customId.split('_');
         const itemId = parts[2];
         const characterId = interaction.values[0];
-        
+
         const characterKey = generarPersonajeKey(interaction.user.id, characterId);
         const item = await compendioDB.get(itemId);
-        
-        // Bloquear si no es el usuario original
-        if (interaction.message.mentions.users.first().id !== interaction.user.id) {
-            return interaction.reply({ content: 'Esta asignación es solo para el usuario que abrió el cofre.', ephemeral: true });
+
+        // Bloquear si no es el usuario original (usando la mención original)
+        if (interaction.message.content.includes(interaction.user.id) === false) {
+            // Usamos followUp ya que la interacción ya fue deferida
+            return interaction.followUp({ content: 'Esta asignación es solo para el usuario que abrió el cofre.', ephemeral: true });
         }
-        
+
         const success = await agregarItemAInventario(characterKey, item);
 
         if (success) {
-            await interaction.message.delete();
-            
+            // El mensaje original del menú desplegable ya no es necesario
+            await interaction.message.delete().catch(console.error);
+
             const characterName = characterId.replace(/_/g, ' ');
-            
+
             const rewardEmbed = new EmbedBuilder()
                 .setColor(REWARD_EMBED_COLOR)
                 .setTitle(`✨ Objeto Asignado! ✨`)
                 .setThumbnail(item.imagen);
-            
+
             // Si el objeto era una moneda, el mensaje es diferente
             if (item.tipo === 'moneda') {
-                 rewardEmbed.setDescription(`¡Has encontrado **${item.nombre}**! Se han añadido **${item.valorRupia}** rupias al inventario de **${characterName}**.`);
+                rewardEmbed.setDescription(`¡Has encontrado **${item.nombre}**! Se han añadido **${item.valorRupia}** rupias al inventario de **${characterName}**.`);
             } else {
-                 rewardEmbed.setDescription(`**${item.nombre}** ha sido añadido al inventario de **${characterName}** (Tupper de ${interaction.user.username}).`);
+                rewardEmbed.setDescription(`**${item.nombre}** ha sido añadido al inventario de **${characterName}** (Tupper de ${interaction.user.username}).`);
             }
 
-            return interaction.reply({ embeds: [rewardEmbed], ephemeral: false });
+            // Usamos followUp después de deferUpdate
+            return interaction.followUp({ embeds: [rewardEmbed], ephemeral: false });
         } else {
-            return interaction.reply({ content: `Error: No se encontró el inventario para el personaje ${characterId}.`, ephemeral: true });
+            return interaction.followUp({ content: `Error: No se encontró el inventario para el personaje ${characterId}.`, ephemeral: true });
         }
     }
 });
 
 client.on('messageCreate', async message => {
-    if (message.author.bot) return; 
+    if (message.author.bot) return;
 
     const hasAdminPerms = message.member.roles.cache.has(ADMIN_ROLE_ID) || message.member.permissions.has(PermissionsBitField.Flags.Administrator);
 
@@ -464,7 +479,7 @@ client.on('messageCreate', async message => {
     const args = fullCommand.split(/ +/);
     const command = args.shift().toLowerCase();
 
-    
+
     // --- COMANDO: HELP ---
     if (command === '-help') {
         const helpEmbed = new EmbedBuilder()
@@ -481,7 +496,7 @@ client.on('messageCreate', async message => {
                         `\`!Zeliminarrupias @Usuario "Personaje" <cantidad|all>\`: Elimina rupias del inventario.`,
                         `\n**— Gestión de Encuentros —**`,
                         `\`!Zcrearenemigo "Nombre" "HP" "URL" ["Mensaje"] [pluralizar_nombre]\`: Registra un enemigo base.`,
-                        `\`!Zeliminarenemigo "Nombre"\`: Borra un enemigo base.`, 
+                        `\`!Zeliminarenemigo "Nombre"\`: Borra un enemigo base.`,
                         `\`!Zspawn <CanalID> "EnemigoNombre" [Cantidad] [sinbotones]\`: Hace aparecer enemigos.`,
                         `\`!Zcrearcofre <CanalID> "Tipo" "ItemNombre"\`: Crea un cofre.`,
                     ].join('\n'),
@@ -495,7 +510,7 @@ client.on('messageCreate', async message => {
                         `\`!Zinventario "Nombre del Tupper"\`: Muestra los objetos y rupias de tu personaje.`,
                         `\`!Zeliminariteminv "Personaje" "Item"\`: Elimina un objeto de tu inventario.`,
                         `\`!Zlistaritems\`: Muestra el compendio de objetos (ordenado por fecha de creación).`,
-                        `\`!Zlistarenemigos\`: Muestra el compendio de monstruos (con paginación).`, 
+                        `\`!Zlistarenemigos\`: Muestra el compendio de monstruos (con paginación).`,
                         `\`!Zveritem "Nombre"\`: Muestra la ficha detallada de un objeto.`,
                         `\`!Z-help\`: Muestra esta guía de comandos.`
                     ].join('\n'),
@@ -503,20 +518,20 @@ client.on('messageCreate', async message => {
                 }
             )
             .setFooter({ text: 'Desarrollado para el Rol de Nuevo Hyrule | Prefijo: !Z' });
-        
+
         return message.channel.send({ embeds: [helpEmbed] });
     }
-    
+
     // --- COMANDO: CREAR ITEM (Staff) ---
     if (command === 'crearitem') {
         if (!hasAdminPerms) {
             return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden registrar objetos mágicos.');
         }
-        
+
         const regex = /"([^"]+)"/g;
         const matches = [...message.content.matchAll(regex)];
         const numExpected = 4;
-        
+
         if (matches.length < numExpected) {
             return message.reply('Sintaxis incorrecta. Uso: `!Zcrearitem "Nombre" "Descripción" "Tipo (moneda/objeto/keyitem)" "URL de Imagen" ["ValorRupia (solo para monedas)"]`');
         }
@@ -525,8 +540,8 @@ client.on('messageCreate', async message => {
         const descripcion = matches[1][1];
         const tipo = matches[2][1].toLowerCase();
         const imagenUrl = matches[3][1];
-        
-        let valorRupia = 0; 
+
+        let valorRupia = 0;
 
         if (!TIPOS_VALIDOS.includes(tipo)) {
             return message.reply(`El tipo de objeto debe ser uno de estos: ${TIPOS_VALIDOS.join(', ')}.`);
@@ -534,7 +549,7 @@ client.on('messageCreate', async message => {
 
         if (tipo === 'moneda') {
             if (matches.length < 5) {
-                 return message.reply('Para items tipo **moneda**, debes especificar el valor en Rupias: `!Zcrearitem "Nombre" "Desc" "moneda" "URL" "ValorRupia"`');
+                return message.reply('Para items tipo **moneda**, debes especificar el valor en Rupias: `!Zcrearitem "Nombre" "Desc" "moneda" "URL" "ValorRupia"`');
             }
             valorRupia = parseInt(matches[4][1]);
             if (isNaN(valorRupia) || valorRupia <= 0) {
@@ -555,17 +570,17 @@ client.on('messageCreate', async message => {
             descripcion: descripcion,
             tipo: tipo,
             valorRupia: valorRupia,
-            disponible: true, 
-            imagen: imagenUrl, 
+            disponible: true,
+            imagen: imagenUrl,
             registradoPor: message.author.tag,
             fecha: now.toLocaleDateString('es-ES'),
-            fechaCreacionMs: now.getTime() 
+            fechaCreacionMs: now.getTime()
         };
-        
+
         await compendioDB.set(id, newItem);
-        
+
         const embed = new EmbedBuilder()
-            .setColor(LIST_EMBED_COLOR) 
+            .setColor(LIST_EMBED_COLOR)
             .setTitle(`✅ Objeto Registrado: ${nombre}`)
             .setDescription(`Un nuevo artefacto ha sido añadido al Compendio de Hyrule.`)
             .addFields(
@@ -576,51 +591,51 @@ client.on('messageCreate', async message => {
             )
             .setImage(imagenUrl)
             .setFooter({ text: `Registrado por: ${message.author.tag}` });
-        
+
         message.channel.send({ embeds: [embed] });
     }
-    
+
     // --- COMANDO: ELIMINAR ITEM (Staff) ---
     if (command === 'eliminaritem') {
         if (!hasAdminPerms) {
             return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden eliminar objetos.');
         }
-        
-        const regex = /"([^"]+)"/; 
+
+        const regex = /"([^"]+)"/;
         const match = fullCommand.match(regex);
-        
+
         if (!match) {
             return message.reply('Uso: `!Zeliminaritem "Nombre Completo del Objeto"`');
         }
-        
-        const nombreItem = match[1]; 
+
+        const nombreItem = match[1];
         const id = nombreItem.toLowerCase().replace(/ /g, '_');
-        
+
         const itemEliminado = await compendioDB.get(id);
         if (!itemEliminado) {
             return message.reply(`No se encontró ningún objeto llamado **${nombreItem}** en el Compendio.`);
         }
-        
+
         await compendioDB.delete(id);
 
         const embed = new EmbedBuilder()
-            .setColor('#cc0000') 
+            .setColor('#cc0000')
             .setTitle(`🗑️ Objeto Eliminado: ${itemEliminado.nombre}`)
             .setDescription(`El objeto **${itemEliminado.nombre}** ha sido borrado permanentemente del Compendio de Nuevo Hyrule.`);
-        
+
         message.channel.send({ embeds: [embed] });
     }
 
     // --- COMANDO: VER ITEM (Público) ---
-    if (command === 'veritem') { 
-        const regex = /"([^"]+)"/; 
+    if (command === 'veritem') {
+        const regex = /"([^"]+)"/;
         const match = fullCommand.match(regex);
-        
+
         if (!match) {
             return message.reply('Uso: `!Zveritem "Nombre Completo del Objeto"`');
         }
-        
-        const nombreItem = match[1]; 
+
+        const nombreItem = match[1];
         const id = nombreItem.toLowerCase().replace(/ /g, '_');
         const item = await compendioDB.get(id);
 
@@ -629,8 +644,8 @@ client.on('messageCreate', async message => {
         }
 
         const embed = new EmbedBuilder()
-            .setColor(LIST_EMBED_COLOR) 
-            .setTitle(item.nombre) 
+            .setColor(LIST_EMBED_COLOR)
+            .setTitle(item.nombre)
             .addFields(
                 { name: 'Descripción', value: item.descripcion, inline: false },
                 { name: 'Tipo', value: item.tipo.toUpperCase(), inline: true },
@@ -639,14 +654,14 @@ client.on('messageCreate', async message => {
             )
             .setImage(item.imagen)
             .setFooter({ text: `Registrado por: ${item.registradoPor}` });
-        
+
         message.channel.send({ embeds: [embed] });
     }
-    
+
     // --- COMANDO: LISTAR ITEMS (Público) ---
     if (command === 'listaritems') {
-        const items = await obtenerTodosItems(); 
-        
+        const items = await obtenerTodosItems();
+
         if (items.length === 0) {
             return message.channel.send('***El Compendio de Objetos está vacío. ¡Que se registre el primer tesoro!***');
         }
@@ -654,28 +669,28 @@ client.on('messageCreate', async message => {
         const currentPage = 0;
         const { embed, totalPages } = createItemEmbedPage(items, currentPage);
         const row = createPaginationRow(currentPage, totalPages);
-        
+
         message.channel.send({ embeds: [embed], components: [row] });
     }
 
     // --- COMANDO: CREAR PERSONAJE/TUPPER (Público) ---
     if (command === 'crearpersonaje') {
-        const regex = /"([^"]+)"/; 
+        const regex = /"([^"]+)"/;
         const match = fullCommand.match(regex);
-        
+
         if (!match) {
             return message.reply('Uso: `!Zcrearpersonaje "Nombre del Tupper"` (Debe ser el nombre exacto de tu tupper).');
         }
-        
-        const nombrePersonaje = match[1]; 
+
+        const nombrePersonaje = match[1];
         const personajeKey = generarPersonajeKey(message.author.id, nombrePersonaje);
-        
+
         const existingPersonaje = await personajesDB.get(personajeKey);
-        
+
         if (existingPersonaje) {
             return message.reply(`¡Ya tienes un inventario registrado para el personaje **${nombrePersonaje}**!`);
         }
-        
+
         const nuevoInventario = {
             nombre: nombrePersonaje,
             propietarioId: message.author.id,
@@ -684,11 +699,11 @@ client.on('messageCreate', async message => {
             rupias: 0,
             fechaRegistro: new Date().toLocaleDateString('es-ES')
         };
-        
+
         await personajesDB.set(personajeKey, nuevoInventario);
-        
+
         const embed = new EmbedBuilder()
-            .setColor(LIST_EMBED_COLOR) 
+            .setColor(LIST_EMBED_COLOR)
             .setTitle(`👤 Personaje Registrado: ${nombrePersonaje}`)
             .setDescription(`Se ha creado un inventario y ha sido vinculado a tu ID de Discord.`)
             .addFields(
@@ -696,34 +711,34 @@ client.on('messageCreate', async message => {
                 { name: 'Inventario Inicial', value: 'Vacío (0 Objetos, 0 Rupias)', inline: true }
             )
             .setFooter({ text: 'Ahora puedes recibir objetos en este personaje.' });
-        
+
         message.channel.send({ embeds: [embed] });
     }
-    
+
     // --- COMANDO: VER INVENTARIO DEL PERSONAJE (Público) ---
     if (command === 'inventario' || command === 'inv') {
-        const regex = /"([^"]+)"/; 
+        const regex = /"([^"]+)"/;
         const match = fullCommand.match(regex);
-        
+
         if (!match) {
             return message.reply('Uso: `!Zinventario "Nombre del Tupper"` (Debes especificar el personaje a consultar).');
         }
-        
-        const nombrePersonaje = match[1]; 
+
+        const nombrePersonaje = match[1];
         const personajeKey = generarPersonajeKey(message.author.id, nombrePersonaje);
-        
+
         let personaje = await personajesDB.get(personajeKey);
-        
+
         if (!personaje) {
             return message.reply(`No se encontró el personaje **${nombrePersonaje}** vinculado a tu cuenta. ¿Seguro que lo creaste con \`!Zcrearpersonaje\`?`);
         }
 
         // LÓGICA DE MIGRACIÓN DE RUPÍAS (asegura que está actualizada)
         await migrarRupias(personaje);
-        personaje = await personajesDB.get(personajeKey); 
-        
+        personaje = await personajesDB.get(personajeKey);
+
         const items = personaje.objetos || [];
-        
+
         // Obtener Avatar (Tupper o Usuario)
         const avatarUrl = await getTupperAvatar(client, nombrePersonaje, message.member);
 
@@ -736,15 +751,15 @@ client.on('messageCreate', async message => {
         const end = start + ITEMS_PER_PAGE;
         const itemsToShow = items.slice(start, end);
 
-        let itemsList = itemsToShow.length > 0 
-            ? itemsToShow.map(item => `• **${item.nombre}**`).join('\n') 
+        let itemsList = itemsToShow.length > 0
+            ? itemsToShow.map(item => `• **${item.nombre}**`).join('\n')
             : '¡Este personaje no tiene objetos!'; // Mensaje de inventario vacío
 
         const embed = new EmbedBuilder()
-            .setColor(LIST_EMBED_COLOR) 
+            .setColor(LIST_EMBED_COLOR)
             .setTitle(`🎒 Inventario de ${personaje.nombre}`)
             .setDescription(`**Propietario:** ${personaje.propietarioTag}\n**Rupias:** ${personaje.rupias}`)
-            .setThumbnail(avatarUrl) 
+            .setThumbnail(avatarUrl)
             .addFields({
                 name: 'Objetos en Posesión',
                 value: itemsList,
@@ -753,24 +768,24 @@ client.on('messageCreate', async message => {
             .setFooter({ text: `Página ${currentPage + 1} de ${totalPages} | Total de objetos: ${items.length}` });
 
         if (totalPages > 1) {
-             const row = createPaginationRow(currentPage, totalPages);
-             message.channel.send({ embeds: [embed], components: [row] });
+            const row = createPaginationRow(currentPage, totalPages);
+            message.channel.send({ embeds: [embed], components: [row] });
         } else {
-             message.channel.send({ embeds: [embed] });
+            message.channel.send({ embeds: [embed] });
         }
     }
-    
+
     // --- COMANDO: VER LISTA DE PERSONAJES DEL USUARIO (Público) ---
     if (command === 'personajes') {
         const characterKeyPrefix = `${message.author.id}:`;
         const allCharacters = [];
-        
+
         for await (const [key, value] of personajesDB.iterator()) {
             if (key.startsWith(characterKeyPrefix)) {
                 allCharacters.push(value);
             }
         }
-        
+
         if (allCharacters.length === 0) {
             return message.reply('No tienes ningún personaje (tupper) registrado. Usa `!Zcrearpersonaje "Nombre"` para crear uno.');
         }
@@ -785,7 +800,7 @@ client.on('messageCreate', async message => {
 
         message.channel.send({ embeds: [embed] });
     }
-    
+
     // --- NUEVO COMANDO: ELIMINAR ITEM DEL INVENTARIO (Público) ---
     if (command === 'eliminariteminv') {
         const regex = /"([^"]+)"/g;
@@ -797,7 +812,7 @@ client.on('messageCreate', async message => {
 
         const nombrePersonaje = matches[0][1];
         const nombreItem = matches[1][1];
-        
+
         const personajeKey = generarPersonajeKey(message.author.id, nombrePersonaje);
         const personaje = await personajesDB.get(personajeKey);
 
@@ -815,11 +830,11 @@ client.on('messageCreate', async message => {
         await personajesDB.set(personajeKey, personaje);
 
         const embed = new EmbedBuilder()
-            .setColor('#cc0000') 
+            .setColor('#cc0000')
             .setTitle(`🗑️ Objeto Eliminado del Inventario`)
             .setDescription(`El objeto **${itemEliminado.nombre}** ha sido eliminado del inventario de **${nombrePersonaje}**.`)
             .setFooter({ text: 'No se puede deshacer esta acción.' });
-        
+
         message.channel.send({ embeds: [embed] });
     }
 
@@ -831,7 +846,7 @@ client.on('messageCreate', async message => {
 
         const regex = /"([^"]+)"/g;
         const matches = [...message.content.matchAll(regex)];
-        
+
         const targetUser = message.mentions.users.first();
         if (!targetUser) {
             return message.reply('Sintaxis incorrecta. Uso: `!Zeliminarrupias @Usuario "NombrePersonaje" <cantidad|all>`');
@@ -845,15 +860,15 @@ client.on('messageCreate', async message => {
         const nombrePersonaje = matches[0][1];
         // La cantidad es el último argumento que no es una mención ni comilla
         const allArgs = fullCommand.split(/\s+/).filter(a => a.length > 0 && !a.startsWith('<@'));
-        let cantidad = allArgs[allArgs.length - 1]; 
+        let cantidad = allArgs[allArgs.length - 1];
 
         // Si la cantidad es el nombre del personaje (lo cual ocurre si no hay un 3er arg), asignamos undefined
         if (cantidad === nombrePersonaje.replace(/ /g, '_').toLowerCase()) {
-             cantidad = undefined;
+            cantidad = undefined;
         }
-        
+
         if (cantidad === undefined) {
-             return message.reply('Debes especificar una cantidad numérica o la palabra `all`.');
+            return message.reply('Debes especificar una cantidad numérica o la palabra `all`.');
         }
 
         const personajeKey = generarPersonajeKey(targetUser.id, nombrePersonaje);
@@ -889,52 +904,52 @@ client.on('messageCreate', async message => {
                 { name: 'Rupias Anteriores', value: oldRupias.toString(), inline: true },
                 { name: 'Rupias Actuales', value: personaje.rupias.toString(), inline: true }
             );
-        
+
         message.channel.send({ embeds: [embed] });
     }
-    
+
     // --- COMANDO: DAR ITEM A PERSONAJE (Staff) - MODIFICADO ---
     if (command === 'daritem') {
         if (!hasAdminPerms) {
             return message.reply('¡Solo los Administradores Canon pueden dar objetos directamente!');
         }
-        
+
         const regex = /"([^"]+)"/g;
         const matches = [...message.content.matchAll(regex)];
 
         if (matches.length < 2 || !message.mentions.users.first()) {
             return message.reply('Sintaxis incorrecta. Uso: `!Zdaritem @Usuario "NombrePersonaje" "NombreItem"`');
         }
-        
+
         const targetUser = message.mentions.users.first();
         const nombrePersonaje = matches[0][1];
         const nombreItem = matches[1][1];
-        
+
         const itemId = nombreItem.toLowerCase().replace(/ /g, '_');
         const item = await compendioDB.get(itemId);
-        
+
         if (!item) {
             return message.reply(`El objeto **${nombreItem}** no se encontró en el compendio.`);
         }
-        
+
         const personajeKey = generarPersonajeKey(targetUser.id, nombrePersonaje);
-        
+
         const success = await agregarItemAInventario(personajeKey, item);
 
         if (!success) {
             return message.reply(`No se encontró un inventario para el personaje **${nombrePersonaje}** vinculado a ${targetUser}. ¿Ha usado \`!Zcrearpersonaje\`?`);
         }
-        
+
         const embed = new EmbedBuilder()
             .setColor(REWARD_EMBED_COLOR)
-            .setTitle(`✨ Objeto Transferido a Inventario ✨`) 
+            .setTitle(`✨ Objeto Transferido a Inventario ✨`)
             .setDescription(`**${item.nombre}** ha sido dado a **${nombrePersonaje}** (Tupper de ${targetUser.tag}).`) // Mensaje sin Staff
             .addFields(
                 { name: 'Descripción del Objeto', value: item.descripcion, inline: false },
                 { name: 'Inventario Actual', value: '*(Usa \`!Zinventario\` para verificarlo)*', inline: false }
             )
             .setThumbnail(item.imagen);
-        
+
         message.channel.send({ content: `${targetUser}`, embeds: [embed] });
     }
 
@@ -943,7 +958,7 @@ client.on('messageCreate', async message => {
         if (!hasAdminPerms) {
             return message.reply('¡Solo los Administradores Canon pueden registrar enemigos!');
         }
-        
+
         const regex = /"([^"]+)"/g;
         const matches = [...message.content.matchAll(regex)];
 
@@ -955,9 +970,9 @@ client.on('messageCreate', async message => {
         const hp = parseInt(matches[1][1]);
         const imagenUrl = matches[2][1];
         const mensajeAparicion = matches.length > 3 ? matches[3][1] : `¡Un **${nombre}** ha aparecido de repente!`;
-        
+
         const allArgs = fullCommand.split(/\s+/);
-        let pluralizarNombre = true; 
+        let pluralizarNombre = true;
         if (allArgs.length > 3) {
             const lastArg = allArgs[allArgs.length - 1].toLowerCase();
             if (lastArg === 'false') {
@@ -966,7 +981,7 @@ client.on('messageCreate', async message => {
                 pluralizarNombre = true;
             }
         }
-        
+
         if (isNaN(hp) || hp <= 0) {
             return message.reply('El HP debe ser un número entero positivo.');
         }
@@ -982,15 +997,15 @@ client.on('messageCreate', async message => {
             nombre: nombre,
             hp: hp,
             imagen: imagenUrl,
-            mensajeAparicion: mensajeAparicion, 
+            mensajeAparicion: mensajeAparicion,
             pluralizar_nombre: pluralizarNombre,
             registradoPor: message.author.tag
         };
-        
+
         await enemigosDB.set(id, newEnemy);
-        
+
         const embed = new EmbedBuilder()
-            .setColor(ENEMY_EMBED_COLOR) 
+            .setColor(ENEMY_EMBED_COLOR)
             .setTitle(`✅ Enemigo Registrado: ${nombre}`)
             .setDescription(`Un nuevo enemigo ha sido añadido a la base de datos de monstruos.`)
             .addFields(
@@ -998,38 +1013,38 @@ client.on('messageCreate', async message => {
                 { name: 'Pluralización Automática', value: pluralizarNombre ? 'Sí (Añade "s")' : 'No (Usa nombre base)', inline: true }
             )
             .setThumbnail(imagenUrl);
-        
+
         message.channel.send({ embeds: [embed] });
     }
-    
+
     // --- COMANDO: ELIMINAR ENEMIGO (Staff) ---
     if (command === 'eliminarenemigo') {
         if (!hasAdminPerms) {
             return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden eliminar enemigos.');
         }
-        
-        const regex = /"([^"]+)"/; 
+
+        const regex = /"([^"]+)"/;
         const match = fullCommand.match(regex);
-        
+
         if (!match) {
             return message.reply('Uso: `!Zeliminarenemigo "Nombre Completo del Enemigo"`');
         }
-        
-        const nombreEnemigo = match[1]; 
+
+        const nombreEnemigo = match[1];
         const id = nombreEnemigo.toLowerCase().replace(/ /g, '_');
-        
+
         const enemigoEliminado = await enemigosDB.get(id);
         if (!enemigoEliminado) {
             return message.reply(`No se encontró ningún enemigo llamado **${nombreEnemigo}** en la base de datos.`);
         }
-        
+
         await enemigosDB.delete(id);
 
         const embed = new EmbedBuilder()
-            .setColor('#cc0000') 
+            .setColor('#cc0000')
             .setTitle(`🗑️ Enemigo Eliminado: ${enemigoEliminado.nombre}`)
             .setDescription(`El enemigo **${enemigoEliminado.nombre}** ha sido borrado permanentemente de la base de datos.`);
-        
+
         message.channel.send({ embeds: [embed] });
     }
 
@@ -1038,7 +1053,7 @@ client.on('messageCreate', async message => {
         if (!hasAdminPerms) {
             return message.reply('¡Solo los Administradores Canon pueden invocar monstruos!');
         }
-        
+
         const fullCommandContent = message.content.slice(PREFIX.length + command.length).trim();
         const argsList = fullCommandContent.split(/\s+/);
 
@@ -1047,26 +1062,26 @@ client.on('messageCreate', async message => {
         }
 
         const canalId = argsList[0].replace(/<#|>/g, '');
-        
+
         const nameMatch = fullCommandContent.match(/"([^"]+)"/);
         let nombreEnemigo;
         let cantidad = 1;
         let sinBotones = false;
-        
+
         let remainingArgs = fullCommandContent;
         if (nameMatch) {
             nombreEnemigo = nameMatch[1];
             remainingArgs = fullCommandContent.slice(fullCommandContent.indexOf(nameMatch[0]) + nameMatch[0].length).trim();
             const partsAfterQuote = remainingArgs.split(/\s+/).filter(p => p.length > 0);
-            
+
             if (partsAfterQuote.length > 0) {
                 const firstPart = partsAfterQuote[0].toLowerCase();
                 const lastPart = partsAfterQuote[partsAfterQuote.length - 1].toLowerCase();
-                
+
                 if (!isNaN(parseInt(firstPart))) {
                     cantidad = parseInt(firstPart);
                 }
-                
+
                 if (firstPart === 'sinbotones' || lastPart === 'sinbotones' || partsAfterQuote.includes('sinbotones')) {
                     sinBotones = true;
                 }
@@ -1085,28 +1100,28 @@ client.on('messageCreate', async message => {
 
         const enemigoId = nombreEnemigo.toLowerCase().replace(/ /g, '_');
         const enemigoBase = await enemigosDB.get(enemigoId);
-        
+
         if (!enemigoBase) {
             return message.reply(`El enemigo **${nombreEnemigo}** no está registrado. Usa \`!Zcrearenemigo\`.`);
         }
 
-        cantidad = Math.max(1, Math.min(10, cantidad)); 
+        cantidad = Math.max(1, Math.min(10, cantidad));
 
         const targetChannel = client.channels.cache.get(canalId);
         if (!targetChannel) {
             return message.reply('No se pudo encontrar ese Canal ID. Asegúrate de que el bot tenga acceso.');
         }
-        
+
         const isPlural = cantidad > 1;
-        
+
         let nombreEnemigoPlural = enemigoBase.nombre;
         if (isPlural) {
             if (enemigoBase.pluralizar_nombre !== false) {
-                nombreEnemigoPlural += 's'; 
+                nombreEnemigoPlural += 's';
             }
         }
-        
-        const spawnMessage = isPlural 
+
+        const spawnMessage = isPlural
             ? `¡Varios **${nombreEnemigoPlural}** han aparecido de repente!`
             : enemigoBase.mensajeAparicion;
 
@@ -1115,14 +1130,14 @@ client.on('messageCreate', async message => {
         const spawnEmbed = new EmbedBuilder()
             .setColor(ENEMY_EMBED_COLOR)
             .setTitle(titleText)
-            .setDescription(spawnMessage) 
+            .setDescription(spawnMessage)
             .addFields(
                 { name: 'HP Base', value: enemigoBase.hp.toString(), inline: true },
                 { name: 'Cantidad', value: cantidad.toString(), inline: true }
             )
-            .setThumbnail(enemigoBase.imagen) 
+            .setThumbnail(enemigoBase.imagen)
             .setFooter({ text: `Encuentro activo en el canal ${targetChannel.name}.` });
-        
+
         let components = [];
         if (!sinBotones) {
             const buttonRow = new ActionRowBuilder().addComponents(
@@ -1137,7 +1152,7 @@ client.on('messageCreate', async message => {
             );
             components.push(buttonRow);
         }
-        
+
         await targetChannel.send({ embeds: [spawnEmbed], components: components });
 
         message.reply(`✅ **${cantidad}x ${enemigoBase.nombre}** invocado(s) en ${targetChannel}${sinBotones ? ' (sin botones de acción)' : ''}.`);
@@ -1148,26 +1163,26 @@ client.on('messageCreate', async message => {
         if (!hasAdminPerms) {
             return message.reply('¡Solo los Administradores Canon pueden crear cofres!');
         }
-        
+
         const fullCommandContent = message.content.slice(PREFIX.length + command.length).trim();
-        
+
         const argsList = fullCommandContent.split(/\s+/);
         const canalId = argsList[0].replace(/<#|>/g, '');
-        
+
         const quotedRegex = /"([^"]+)"/g;
         const matches = [...fullCommandContent.matchAll(quotedRegex)];
-        
+
         if (!canalId || matches.length < 2) {
             return message.reply('Sintaxis incorrecta. Uso: `!Zcrearcofre <CanalID> "Tipo (pequeño/grande/jefe)" "Nombre del Item"`');
         }
 
-        const tipoCofre = matches[0][1].toLowerCase(); 
-        const nombreItem = matches[1][1]; 
+        const tipoCofre = matches[0][1].toLowerCase();
+        const nombreItem = matches[1][1];
         const itemId = nombreItem.toLowerCase().replace(/ /g, '_');
 
         const cofre = CHEST_TYPES[tipoCofre];
         const item = await compendioDB.get(itemId);
-        
+
         if (!cofre) {
             return message.reply(`Tipo de cofre inválido. Tipos permitidos: \`${Object.keys(CHEST_TYPES).join(', ')}\`.`);
         }
@@ -1182,11 +1197,11 @@ client.on('messageCreate', async message => {
 
         const treasureEmbed = new EmbedBuilder()
             .setColor(TREASURE_EMBED_COLOR)
-            .setTitle(`🔑 ¡Tesoro Encontrado! 🎁`) 
-            .setDescription(`¡Un cofre ha aparecido de la nada! ¡Ábrelo para revelar el tesoro!`) 
-            .setThumbnail(cofre.img) 
-            .setFooter({ text: 'Pulsa el botón para interactuar.' }); 
-        
+            .setTitle(`🔑 ¡Tesoro Encontrado! 🎁`)
+            .setDescription(`¡Un cofre ha aparecido de la nada! ¡Ábrelo para revelar el tesoro!`)
+            .setThumbnail(cofre.img)
+            .setFooter({ text: 'Pulsa el botón para interactuar.' });
+
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
                 .setCustomId(`open_chest_${itemId}`)
@@ -1200,17 +1215,17 @@ client.on('messageCreate', async message => {
 
     // --- COMANDO: LISTAR ENEMIGOS (Público) ---
     if (command === 'listarenemigos') {
-        const enemies = await obtenerTodosEnemigos(); 
-        
+        const enemies = await obtenerTodosEnemigos();
+
         if (enemies.length === 0) {
             return message.channel.send('***El Compendio de Monstruos está vacío. ¡Que se registre la primera criatura!***');
         }
 
         const currentPage = 0;
-        const { embed, totalPages } = createEnemyEmbedPage(enemies, currentPage); 
-        const row = createPaginationRow(currentPage, totalPages); 
-        
-        message.channel.send({ embeds: [embed], components: [row] }); 
+        const { embed, totalPages } = createEnemyEmbedPage(enemies, currentPage);
+        const row = createPaginationRow(currentPage, totalPages);
+
+        message.channel.send({ embeds: [embed], components: [row] });
     }
 });
 
