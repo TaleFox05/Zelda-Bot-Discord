@@ -1048,7 +1048,7 @@ client.on('messageCreate', async message => {
     }
 
     // --- COMANDO: AYUDA (Público) - LÓGICA COMPLETA ---
-    if (command === 'ayuda') {
+    if (command === '-help') {
         const helpEmbed = new EmbedBuilder()
             .setColor(LIST_EMBED_COLOR)
             .setTitle('📖 Guía de Comandos del Bot de Hyrule')
