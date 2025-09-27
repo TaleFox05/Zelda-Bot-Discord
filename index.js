@@ -7,6 +7,7 @@ const Keyv = require('keyv');
 const PREFIX = '!Z';
 const ADMIN_ROLE_ID = "1420026299090731050";
 const LIST_EMBED_COLOR = '#427522';
+const DELETE_EMBED_COLOR = '#D11919';
 const TIPOS_VALIDOS = ['moneda', 'objeto', 'keyitem'];
 
 // Base de datos
@@ -81,7 +82,7 @@ function createItemEmbedPage(items, pageIndex) {
     const start = pageIndex * ITEMS_PER_PAGE;
     const end = start + ITEMS_PER_PAGE;
     const itemsToShow = items.slice(start, end);
-    const totalPages = Math.ceil(items.length / ITEMS_PER_PAGE);
+    const totalPages = Math.ceil(items.length / ITEMS_PER_PAGE) || 1; // Asegurar al menos 1 página
 
     const embed = new EmbedBuilder()
         .setColor(LIST_EMBED_COLOR)
@@ -290,7 +291,13 @@ client.on('messageCreate', async message => {
 
             if (items.length === 0) {
                 console.log('Compendio vacío');
-                return message.channel.send('***El Compendio de Hyrule está vacío. ¡Que las Diosas traigan el primer tesoro!***');
+                const embed = new EmbedBuilder()
+                    .setColor(LIST_EMBED_COLOR)
+                    .setTitle('🏰 Compendio de Objetos de Nuevo Hyrule 🏰')
+                    .setDescription('***El Compendio de Hyrule está vacío. ¡Que las Diosas traigan el primer tesoro!***')
+                    .setFooter({ text: 'Página 1 de 1 | Total de ítems: 0' });
+                const row = createPaginationRow(0, 1);
+                return message.channel.send({ embeds: [embed], components: [row] });
             }
 
             const currentPage = 0;
@@ -298,7 +305,7 @@ client.on('messageCreate', async message => {
             const row = createPaginationRow(currentPage, totalPages);
             console.log(`Enviando embed de !Zitemslista (Página ${currentPage + 1} de ${totalPages})`);
 
-            await message.channel.send({ embeds: [embed], components: totalPages > 1 ? [row] : [] });
+            await message.channel.send({ embeds: [embed], components: [row] });
         } catch (error) {
             console.error('Error en !Zitemslista:', error);
             await message.reply('¡Error al listar el Compendio de Hyrule! Contacta a un administrador.');
@@ -342,7 +349,7 @@ client.on('messageCreate', async message => {
             console.log(`Ítem eliminado: ${itemId} - ${item.nombre}`);
 
             const embed = new EmbedBuilder()
-                .setColor(LIST_EMBED_COLOR)
+                .setColor(DELETE_EMBED_COLOR)
                 .setTitle(`🗑️ Objeto Eliminado: ${item.nombre}`)
                 .setDescription(`¡El objeto ha sido retirado del Compendio de Hyrule!`)
                 .addFields(
@@ -382,7 +389,13 @@ client.on('interactionCreate', async interaction => {
 
         if (items.length === 0) {
             console.log('Compendio vacío durante paginación.');
-            return interaction.update({ content: '***El Compendio de Hyrule está vacío. ¡Que las Diosas traigan el primer tesoro!***', components: [], embeds: [] });
+            const embed = new EmbedBuilder()
+                .setColor(LIST_EMBED_COLOR)
+                .setTitle('🏰 Compendio de Objetos de Nuevo Hyrule 🏰')
+                .setDescription('***El Compendio de Hyrule está vacío. ¡Que las Diosas traigan el primer tesoro!***')
+                .setFooter({ text: 'Página 1 de 1 | Total de ítems: 0' });
+            const row = createPaginationRow(0, 1);
+            return interaction.update({ embeds: [embed], components: [row] });
         }
 
         let newPage = currentPage;
@@ -396,7 +409,7 @@ client.on('interactionCreate', async interaction => {
         const { embed: newEmbed, totalPages: newTotalPages } = createItemEmbedPage(items, newPage);
         const newRow = createPaginationRow(newPage, newTotalPages);
         console.log(`Actualizando paginación: Página ${newPage + 1} de ${newTotalPages}`);
-        await interaction.update({ embeds: [newEmbed], components: newTotalPages > 1 ? [newRow] : [] });
+        await interaction.update({ embeds: [newEmbed], components: [newRow] });
     } catch (error) {
         console.error('Error en interactionCreate:', error);
         await interaction.reply({ content: '¡Error al navegar por el Compendio de Hyrule! Contacta a un administrador.', ephemeral: true });
