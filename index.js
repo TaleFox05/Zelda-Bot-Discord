@@ -41,6 +41,12 @@ async function verificarRedis() {
     }
 }
 
+// Función para validar URL de imagen
+function isValidImageUrl(url) {
+    if (!url) return false;
+    return url.match(/\.(jpeg|jpg|png|gif|bmp|webp)$/i) !== null;
+}
+
 // Función para obtener todos los ítems (ordenados por ID numérico)
 async function obtenerTodosItems() {
     try {
@@ -49,7 +55,7 @@ async function obtenerTodosItems() {
         }
         const items = {};
         for await (const [key, value] of compendioDB.iterator()) {
-            if (value && value.id && value.nombre) { // Validar datos
+            if (value && value.id && value.nombre) {
                 items[key] = value;
             }
         }
@@ -117,6 +123,11 @@ client.on('messageCreate', async message => {
             const tipo = matches[2][1].toLowerCase();
             const imagenUrl = matches[3] ? matches[3][1] : '';
 
+            if (imagenUrl && !isValidImageUrl(imagenUrl)) {
+                console.log(`URL de imagen inválida: ${imagenUrl}`);
+                return message.reply('La URL de la imagen no es válida. Usa una URL que termine en .jpg, .png, .gif, .bmp o .webp.');
+            }
+
             let valorRupia = 0;
             if (tipo === 'moneda') {
                 if (matches.length < 4) {
@@ -166,7 +177,7 @@ client.on('messageCreate', async message => {
                     { name: 'Valor (Rupias)', value: tipo === 'moneda' ? valorRupia.toString() : 'N/A', inline: true },
                     { name: 'Estado', value: 'Disponible', inline: true }
                 )
-                .setImage(imagenUrl)
+                .setThumbnail(imagenUrl || null)
                 .setFooter({ text: `Registrado por: ${message.author.tag} | Hyrule custodia este tesoro.` });
 
             await message.channel.send({ embeds: [embed] });
@@ -198,7 +209,7 @@ client.on('messageCreate', async message => {
             console.log(`Ítem encontrado: ${id} - ${item.nombre}`);
             const embed = new EmbedBuilder()
                 .setColor(LIST_EMBED_COLOR)
-                .setTitle(`✨ ${item.nombre} (ID: ${item.id})`)
+                .setTitle(`✨ ${item.nombre}`)
                 .setDescription(`*Un tesoro registrado en el Compendio de Hyrule.*`)
                 .addFields(
                     { name: 'ID', value: item.id, inline: true },
@@ -207,7 +218,7 @@ client.on('messageCreate', async message => {
                     { name: 'Estado', value: item.disponible ? 'Disponible' : 'En Posesión', inline: true },
                     { name: 'Fecha de Registro', value: item.fecha, inline: true }
                 )
-                .setImage(item.imagen)
+                .setThumbnail(item.imagen || null)
                 .setFooter({ text: `Registrado por: ${item.registradoPor} | Protegido por las Diosas.` });
 
             await message.channel.send({ embeds: [embed] });
@@ -235,8 +246,8 @@ client.on('messageCreate', async message => {
 
             items.slice(0, 25).forEach(item => {
                 embed.addFields({
-                    name: `**${item.nombre}** (ID: ${item.id})`,
-                    value: `**Imagen:** [Ver](${item.imagen || 'https://example.com/placeholder.png'})\n**Fecha de Creación:** ${item.fecha}`,
+                    name: `**${item.nombre}**`,
+                    value: `**ID:** ${item.id}\n**Descripción:** ${item.descripcion}\n**Fecha de Creación:** ${item.fecha}`,
                     inline: false
                 });
             });
