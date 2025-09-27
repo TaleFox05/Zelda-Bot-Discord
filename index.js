@@ -149,6 +149,65 @@ async function agregarItemAInventario(key, item) {
 }
 
 /**
+ * Otorga un ítem (o moneda) a un personaje, actualizando el inventario o el saldo.
+ * * @param {object} personajeData - El objeto de datos del personaje a modificar.
+ * @param {string} itemId - La ID interna (clave limpia) del ítem.
+ * @param {number} cantidad - La cantidad a otorgar.
+ * @returns {string} Mensaje describiendo el resultado de la acción.
+ */
+async function otorgarItem(personajeData, itemId, cantidad) {
+    if (!personajeData || !itemId || cantidad <= 0) {
+        return "Error interno al otorgar ítem: datos incompletos.";
+    }
+
+    const itemData = await compendioDB.get(itemId);
+    if (!itemData) {
+        return `Error: El ítem con ID \`${itemId}\` no existe en el Compendio.`;
+    }
+
+    const itemNombre = itemData.nombre;
+
+    // 🚩 LÓGICA CLAVE: MANEJO DE MONEDAS
+    if (itemData.tipo === 'moneda') {
+        const valorNumerico = itemData.valor || 1; // Asegurar que tiene un valor, si no, usar 1 por defecto
+        const totalGanado = cantidad * valorNumerico;
+
+        // Asumiendo que el campo para el saldo del personaje es 'saldo' o 'rupias'
+        // Si tu campo es 'saldo', usa: personajeData.saldo = (personajeData.saldo || 0) + totalGanado;
+        // Si tu campo es 'rupias', usa: personajeData.rupias = (personajeData.rupias || 0) + totalGanado;
+
+        // **UTILIZAREMOS 'saldo' como nombre de campo por convención**
+        personajeData.saldo = (personajeData.saldo || 0) + totalGanado;
+
+        return `Ganaste ${totalGanado} Rupias (x${cantidad} ${itemNombre})`;
+    }
+
+    // LÓGICA ESTÁNDAR: MANEJO DE ÍTEMS FÍSICOS
+    else {
+        // Inicializar inventario si no existe
+        if (!personajeData.inventario) {
+            personajeData.inventario = [];
+        }
+
+        // Buscar si el ítem ya existe en el inventario
+        const index = personajeData.inventario.findIndex(i => i.id === itemId);
+
+        if (index > -1) {
+            // El ítem existe, solo aumentar la cantidad
+            personajeData.inventario[index].cantidad += cantidad;
+        } else {
+            // El ítem no existe, añadirlo nuevo
+            personajeData.inventario.push({
+                id: itemId,
+                cantidad: cantidad,
+                nombre: itemNombre // Opcional: guardar el nombre original para display rápido
+            });
+        }
+        return `Recibiste x${cantidad} ${itemNombre}`;
+    }
+}
+
+/**
  * Realiza la migración de rupias de un inventario existente.
  * Busca items de tipo 'moneda' en el inventario de objetos y los transfiere al contador de rupias.
  * @param {object} personaje - El objeto del personaje a migrar.
@@ -540,7 +599,7 @@ client.on('interactionCreate', async interaction => {
         await interaction.deferUpdate({ ephemeral: false });
 
         const parts = interaction.customId.split('_');
-        // parts[2] contiene "itemId-tipoCofre" o simplemente "itemId"
+        // parts[2] contiene "itemId-tipoCofre"
         const fullItemIdAndChest = parts[2];
 
         // Extraer solo la parte del ID antes del primer guion (clave limpia)
@@ -558,8 +617,40 @@ client.on('interactionCreate', async interaction => {
             return interaction.followUp({ content: 'Esta asignación es solo para el usuario que abrió el cofre.', ephemeral: true });
         }
 
-        // Llamar a la función centralizada para manejar la asignación y el mensaje.
-        return manejarAsignacionCofre(interaction.user.id, itemId, characterId, interaction);
+        // --- 🎯 NUEVA LÓGICA DE ASIGNACIÓN (usando otorgarItem directamente aquí) ---
+        const personajeKey = `${interaction.user.id}:${characterId}`;
+        const personajeData = await personajesDB.get(personajeKey);
+
+        // **IMPORTANTE**: Necesitas el cofreData para saber la cantidad a otorgar.
+        // Dado que la lógica del cofre *no* almacena la cantidad de forma trivial en el customId,
+        // Asumiremos por ahora que el cofre solo da 1 unidad del item.
+        // **ESTO ES UN PUNTO A MEJORAR SI LOS COFRES DEBEN DAR MÚLTIPLES UNIDADES DE UN SOLO ÍTEM.**
+        const cantidad = 1;
+
+        if (!personajeData) {
+            return interaction.followUp({ content: `No se encontró el personaje **${characterId.replace(/_/g, ' ')}**.`, ephemeral: true });
+        }
+
+        const resultado = await otorgarItem(personajeData, itemId, cantidad);
+
+        // Guardar los cambios del personaje (que ahora incluye el nuevo saldo/inventario)
+        await personajesDB.set(personajeKey, personajeData);
+
+        // Finalizar la interacción y mostrar los resultados
+        const embedResultado = new EmbedBuilder()
+            .setColor(SUCCESS_EMBED_COLOR)
+            .setTitle(`✅ Tesoro Asignado`)
+            .setDescription(`El tesoro ha sido asignado a **${personajeData.nombre}**.\n\n${resultado}`)
+            .setFooter({ text: 'Inventario/Saldo actualizado.' });
+
+        await interaction.message.edit({
+            content: `El tesoro ha sido asignado.`,
+            embeds: [embedResultado],
+            components: [] // Eliminar el menú desplegable
+        });
+
+        return;
+        // --- FIN DE LA NUEVA LÓGICA ---
     }
 
     // 5. Lógica de Confirmación de Borrado de Personajes
@@ -1528,60 +1619,61 @@ client.on('messageCreate', async message => {
         message.reply(`✅ **${cantidad}x ${enemigoBase.nombre}** invocado(s) en ${targetChannel}${sinBotones ? ' (sin botones de acción)' : ''}.`);
     }
 
-    // --- COMANDO: CREAR COFRE (Staff) - MODIFICADO BOTÓN CUSTOM ID
+    // --- MODIFICACIÓN: COMANDO CREAR COFRE ---
     if (command === 'crearcofre') {
-        if (!hasAdminPerms) {
-            return message.reply('¡Solo los Administradores Canon pueden crear cofres!');
+        // Asegurar que solo Staff puede usar este comando
+        if (!message.member.roles.cache.has(STAFF_ROLE_ID)) {
+            return message.reply('❌ Solo el Staff tiene permiso para crear cofres.');
         }
 
-        const fullCommandContent = message.content.slice(PREFIX.length + command.length).trim();
+        const args = fullCommand.slice(prefix.length + command.length).trim();
+        // Regex para capturar: <CanalID>, "Tipo", y el objeto JSON de ítems.
+        // Asume que la ID del canal es el primer argumento, seguido por dos argumentos entre comillas (el último es el JSON)
+        const cofreRegex = /^(\d+)\s+"([^"]+)"\s+({[\s\S]+})$/;
+        const cofreMatch = args.match(cofreRegex);
 
-        const argsList = fullCommandContent.split(/\s+/);
-        const canalId = argsList[0].replace(/<#|>/g, '');
-
-        const quotedRegex = /"([^"]+)"/g;
-        const matches = [...fullCommandContent.matchAll(quotedRegex)];
-
-        if (!canalId || matches.length < 2) {
-            return message.reply('Sintaxis incorrecta. Uso: `!Zcrearcofre <CanalID> "Tipo (pequeño/grande/jefe)" "Nombre del Item"`');
+        if (!cofreMatch) {
+            return message.reply('Uso: `!Zcrearcofre <ID Canal> "Tipo (pequeño/grande/jefe)" { "ID_ITEM_1": CANTIDAD, "ID_ITEM_2": OTRA_CANTIDAD }`');
         }
 
-        const tipoCofre = matches[0][1].toLowerCase();
-        const nombreItem = matches[1][1];
-        const itemId = generarKeyLimpia(nombreItem);
+        const canalID = cofreMatch[1];
+        const tipoCofre = cofreMatch[2];
+        const itemsJsonString = cofreMatch[3];
 
-        const cofre = CHEST_TYPES[tipoCofre];
-        const item = await compendioDB.get(itemId);
-
-        if (!cofre) {
-            return message.reply(`Tipo de cofre inválido. Tipos permitidos: \`${Object.keys(CHEST_TYPES).join(', ')}\`.`);
-        }
-        if (!item) {
-            return message.reply(`El item **${nombreItem}** no está registrado en el compendio.`);
+        let items;
+        try {
+            // Parsear el string JSON de los ítems
+            items = JSON.parse(itemsJsonString);
+        } catch (e) {
+            return message.reply(`⛔ Error al parsear el objeto JSON de ítems. Asegúrate de que las ID de los ítems estén entre comillas dobles (ej: \`"rupia_roja": 1\`).`);
         }
 
-        const targetChannel = client.channels.cache.get(canalId);
-        if (!targetChannel) {
-            return message.reply('No se pudo encontrar ese Canal ID. Asegúrate de que el bot tenga acceso.');
+        // 🚩 VALIDACIÓN CLAVE: Verificar que todas las IDs de los ítems existen
+        for (const id in items) {
+            if (items.hasOwnProperty(id)) {
+                if (typeof items[id] !== 'number' || items[id] <= 0) {
+                    return message.reply(`⛔ Error: La cantidad para la ID \`${id}\` debe ser un número positivo.`);
+                }
+                const itemData = await compendioDB.get(id);
+
+                if (!itemData) {
+                    return message.reply(`⛔ Error: La ID de ítem \`${id}\` no existe en el Compendio. Usa \`!Zmostraritemid\` para verificar las IDs.`);
+                }
+            }
         }
 
-        const treasureEmbed = new EmbedBuilder()
-            .setColor(TREASURE_EMBED_COLOR)
-            .setTitle(`🔑 ¡Tesoro Encontrado! 🎁`)
-            .setDescription(`¡Un cofre ha aparecido de la nada! ¡Ábrelo para revelar el tesoro!`)
-            .setThumbnail(cofre.img)
-            .setFooter({ text: `Pulsa el botón para interactuar. Contiene: ${item.nombre}` }); // Pequeño spoiler para staff
+        const nuevoCofre = {
+            canalId: canalID,
+            tipo: tipoCofre,
+            items: items, // Ya tiene las IDs internas como claves
+            registradoPor: message.author.tag,
+            fechaCreacion: new Date().toISOString()
+        };
 
-        const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                // El custom ID ahora lleva el item ID y el tipo de cofre
-                .setCustomId(`open_chest_${itemId}-${tipoCofre}`)
-                .setLabel(`Abrir ${cofre.nombre}`)
-                .setStyle(ButtonStyle.Success)
-        );
+        const cofreKey = generarKeyLimpia(tipoCofre + '_' + canalID); // Puedes ajustar la clave si usas otra convención
+        await cofresDB.set(cofreKey, nuevoCofre);
 
-        targetChannel.send({ embeds: [treasureEmbed], components: [row] });
-        message.reply(`✅ **${cofre.nombre}** creado en ${targetChannel} con el item **${item.nombre}** dentro.`);
+        message.channel.send({ content: `✅ Cofre **${tipoCofre}** creado exitosamente para el canal **${canalID}**. Contiene **${Object.keys(items).length}** ítems diferentes (usando ID interna).` });
     }
 });
 
