@@ -1,6 +1,6 @@
 // Carga la librería 'dotenv' para leer el archivo .env
 require('dotenv').config();
-const { Client, GatewayIntentBits, PermissionsBitField, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, PermissionsBitField, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const Keyv = require('keyv');
 
 // Configuración
@@ -20,13 +20,15 @@ const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMessageReactions
     ]
 });
 
 // Evitar eventos duplicados
 client.removeAllListeners('messageCreate');
 client.removeAllListeners('ready');
+client.removeAllListeners('interactionCreate');
 
 // Función para verificar conexión a Redis
 async function verificarRedis() {
@@ -71,6 +73,58 @@ async function obtenerTodosItems() {
         console.error('Error en obtenerTodosItems:', error);
         throw new Error('No se pudo acceder al Compendio de Hyrule.');
     }
+}
+
+// Función para crear el embed de la lista de ítems
+function createItemEmbedPage(items, pageIndex) {
+    const ITEMS_PER_PAGE = 5;
+    const start = pageIndex * ITEMS_PER_PAGE;
+    const end = start + ITEMS_PER_PAGE;
+    const itemsToShow = items.slice(start, end);
+    const totalPages = Math.ceil(items.length / ITEMS_PER_PAGE);
+
+    const embed = new EmbedBuilder()
+        .setColor(LIST_EMBED_COLOR)
+        .setTitle('🏰 Compendio de Objetos de Nuevo Hyrule 🏰')
+        .setDescription(`*Explora los tesoros registrados en Hyrule.*`);
+
+    itemsToShow.forEach(item => {
+        embed.addFields({
+            name: `**${item.nombre}**`,
+            value: `**ID:** ${item.id}\n**Descripción:** ${item.descripcion}\n**Fecha de Creación:** ${item.fecha}`,
+            inline: false
+        });
+    });
+
+    embed.setFooter({ text: `Página ${pageIndex + 1} de ${totalPages} | Total de ítems: ${items.length}` });
+
+    return { embed, totalPages };
+}
+
+// Función para crear los botones de paginación
+function createPaginationRow(currentPage, totalPages) {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId('first')
+            .setEmoji('⏮️')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(currentPage === 0),
+        new ButtonBuilder()
+            .setCustomId('prev')
+            .setEmoji('◀️')
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(currentPage === 0),
+        new ButtonBuilder()
+            .setCustomId('next')
+            .setEmoji('▶️')
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(currentPage === totalPages - 1),
+        new ButtonBuilder()
+            .setCustomId('last')
+            .setEmoji('⏭️')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(currentPage === totalPages - 1)
+    );
 }
 
 // Evento: Bot listo
@@ -239,27 +293,12 @@ client.on('messageCreate', async message => {
                 return message.channel.send('***El Compendio de Hyrule está vacío. ¡Que las Diosas traigan el primer tesoro!***');
             }
 
-            const embed = new EmbedBuilder()
-                .setColor(LIST_EMBED_COLOR)
-                .setTitle('🏰 Compendio de Objetos de Nuevo Hyrule 🏰')
-                .setDescription(`*Explora los tesoros registrados en Hyrule.*`);
+            const currentPage = 0;
+            const { embed, totalPages } = createItemEmbedPage(items, currentPage);
+            const row = createPaginationRow(currentPage, totalPages);
+            console.log(`Enviando embed de !Zitemslista (Página ${currentPage + 1} de ${totalPages})`);
 
-            items.slice(0, 25).forEach(item => {
-                embed.addFields({
-                    name: `**${item.nombre}**`,
-                    value: `**ID:** ${item.id}\n**Descripción:** ${item.descripcion}\n**Fecha de Creación:** ${item.fecha}`,
-                    inline: false
-                });
-            });
-
-            if (items.length > 25) {
-                embed.setFooter({ text: `Mostrando ${items.length > 25 ? 25 : items.length} de ${items.length} ítems. Algunos ítems no se muestran debido a limitaciones.` });
-            } else {
-                embed.setFooter({ text: `Total de ítems: ${items.length}` });
-            }
-
-            console.log('Enviando embed de !Zitemslista');
-            await message.channel.send({ embeds: [embed] });
+            await message.channel.send({ embeds: [embed], components: totalPages > 1 ? [row] : [] });
         } catch (error) {
             console.error('Error en !Zitemslista:', error);
             await message.reply('¡Error al listar el Compendio de Hyrule! Contacta a un administrador.');
@@ -317,6 +356,50 @@ client.on('messageCreate', async message => {
             console.error('Error en !Zeliminaritem:', error);
             await message.reply('¡Error al eliminar el objeto del Compendio de Hyrule! Contacta a un administrador.');
         }
+    }
+});
+
+// Evento: Manejo de interacciones (para paginación)
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isButton() || !['first', 'prev', 'next', 'last'].includes(interaction.customId)) return;
+
+    try {
+        const footerText = interaction.message.embeds[0]?.footer?.text;
+        if (!footerText) {
+            console.error('Error: No se encontró footer en el embed de paginación.');
+            return interaction.reply({ content: 'Error al cargar la página. Intenta de nuevo.', ephemeral: true });
+        }
+
+        const match = footerText.match(/Página (\d+) de (\d+)/);
+        if (!match) {
+            console.error('Error: No se pudo parsear el footer de paginación.');
+            return interaction.reply({ content: 'Error al cargar la página. Intenta de nuevo.', ephemeral: true });
+        }
+
+        const currentPage = parseInt(match[1]) - 1;
+        const totalPages = parseInt(match[2]);
+        const items = await obtenerTodosItems();
+
+        if (items.length === 0) {
+            console.log('Compendio vacío durante paginación.');
+            return interaction.update({ content: '***El Compendio de Hyrule está vacío. ¡Que las Diosas traigan el primer tesoro!***', components: [], embeds: [] });
+        }
+
+        let newPage = currentPage;
+        switch (interaction.customId) {
+            case 'first': newPage = 0; break;
+            case 'prev': newPage = Math.max(0, currentPage - 1); break;
+            case 'next': newPage = Math.min(totalPages - 1, currentPage + 1); break;
+            case 'last': newPage = totalPages - 1; break;
+        }
+
+        const { embed: newEmbed, totalPages: newTotalPages } = createItemEmbedPage(items, newPage);
+        const newRow = createPaginationRow(newPage, newTotalPages);
+        console.log(`Actualizando paginación: Página ${newPage + 1} de ${newTotalPages}`);
+        await interaction.update({ embeds: [newEmbed], components: newTotalPages > 1 ? [newRow] : [] });
+    } catch (error) {
+        console.error('Error en interactionCreate:', error);
+        await interaction.reply({ content: '¡Error al navegar por el Compendio de Hyrule! Contacta a un administrador.', ephemeral: true });
     }
 });
 
