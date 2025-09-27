@@ -24,12 +24,34 @@ const client = new Client({
     ]
 });
 
+// Evitar eventos duplicados
+client.removeAllListeners('messageCreate');
+client.removeAllListeners('ready');
+
+// Función para verificar conexión a Redis
+async function verificarRedis() {
+    try {
+        await compendioDB.set('test', 'test');
+        await compendioDB.delete('test');
+        console.log('Conexión a Redis verificada.');
+        return true;
+    } catch (error) {
+        console.error('Error al verificar Redis:', error);
+        return false;
+    }
+}
+
 // Función para obtener todos los ítems (ordenados por ID numérico)
 async function obtenerTodosItems() {
     try {
+        if (!(await verificarRedis())) {
+            throw new Error('No se pudo conectar con Redis.');
+        }
         const items = {};
         for await (const [key, value] of compendioDB.iterator()) {
-            items[key] = value;
+            if (value && value.id && value.nombre) { // Validar datos
+                items[key] = value;
+            }
         }
         const itemsArray = Object.values(items);
         itemsArray.sort((a, b) => {
@@ -37,6 +59,7 @@ async function obtenerTodosItems() {
             const idB = parseInt(b.id.replace('item_', '')) || 0;
             return idA - idB;
         });
+        console.log(`Ítems obtenidos en obtenerTodosItems: ${itemsArray.length}`);
         return itemsArray;
     } catch (error) {
         console.error('Error en obtenerTodosItems:', error);
@@ -48,20 +71,14 @@ async function obtenerTodosItems() {
 client.on('ready', async () => {
     console.log(`¡Zelda BOT iniciado como ${client.user.tag}!`);
     client.user.setActivity('Gestionando el Compendio de Hyrule');
-    try {
-        await compendioDB.set('test', 'test');
-        await compendioDB.delete('test');
-        console.log('Conexión a Redis verificada correctamente.');
-    } catch (error) {
-        console.error('Error al conectar con Redis:', error);
-    }
+    await verificarRedis();
 });
 
 // Evento: Manejo de comandos
 client.on('messageCreate', async message => {
     if (message.author.bot) return;
 
-    console.log(`Mensaje recibido: ${message.content}`);
+    console.log(`Mensaje recibido: ${message.content} (Canal: ${message.channel.id}, Autor: ${message.author.tag})`);
 
     if (!message.content.startsWith(PREFIX)) {
         console.log('Mensaje ignorado: No empieza con el prefijo !Z');
@@ -76,7 +93,7 @@ client.on('messageCreate', async message => {
     const fullCommand = message.content.slice(PREFIX.length).trim();
     const args = fullCommand.split(/ +/);
     const command = args.shift().toLowerCase();
-    console.log(`Comando detectado: ${command}`);
+    console.log(`Comando detectado: ${command} (Autor: ${message.author.tag})`);
 
     // --- COMANDO: CREAR ITEM (Staff) ---
     if (command === 'crearitem') {
@@ -170,12 +187,15 @@ client.on('messageCreate', async message => {
             }
 
             const id = match[1];
+            console.log(`Buscando ítem con ID: ${id}`);
             const item = await compendioDB.get(id);
 
             if (!item) {
+                console.log(`Ítem no encontrado: ${id}`);
                 return message.reply(`No se encontró ningún objeto con ID **${id}** en el Compendio de Hyrule.`);
             }
 
+            console.log(`Ítem encontrado: ${id} - ${item.nombre}`);
             const embed = new EmbedBuilder()
                 .setColor(LIST_EMBED_COLOR)
                 .setTitle(`✨ ${item.nombre} (ID: ${item.id})`)
@@ -202,7 +222,6 @@ client.on('messageCreate', async message => {
         console.log('Ejecutando !Zitemslista');
         try {
             const items = await obtenerTodosItems();
-            console.log(`Ítems obtenidos: ${items.length}`);
 
             if (items.length === 0) {
                 console.log('Compendio vacío');
@@ -217,13 +236,15 @@ client.on('messageCreate', async message => {
             items.slice(0, 25).forEach(item => {
                 embed.addFields({
                     name: `**${item.nombre}** (ID: ${item.id})`,
-                    value: `**Imagen:** [Ver](${item.imagen})\n**Fecha de Creación:** ${item.fecha}`,
+                    value: `**Imagen:** [Ver](${item.imagen || 'https://example.com/placeholder.png'})\n**Fecha de Creación:** ${item.fecha}`,
                     inline: false
                 });
             });
 
             if (items.length > 25) {
                 embed.setFooter({ text: `Mostrando ${items.length > 25 ? 25 : items.length} de ${items.length} ítems. Algunos ítems no se muestran debido a limitaciones.` });
+            } else {
+                embed.setFooter({ text: `Total de ítems: ${items.length}` });
             }
 
             console.log('Enviando embed de !Zitemslista');
@@ -263,6 +284,7 @@ client.on('messageCreate', async message => {
             }
 
             if (!item) {
+                console.log(`Ítem no encontrado para eliminar: ${input}`);
                 return message.reply(`No se encontró ningún objeto con nombre o ID **${input}** en el Compendio de Hyrule.`);
             }
 
