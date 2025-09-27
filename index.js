@@ -760,7 +760,6 @@ client.on('messageCreate', async message => {
                         `\`!Zcrearitem "Nombre" "Desc" "Tipo" "URL" ["ValorRupia"]\`: Registra un nuevo objeto.`,
                         `\`!Zeliminaritem "Nombre"\`: Borra un objeto.`,
                         `\`!Zdaritem @Usuario "Personaje" "ItemNombre"\`: Asigna un item del compendio al inventario de un personaje.`,
-                        `\`!Zmostraritemid "Nombre"\`: Muestra la ID (clave interna) de un objeto del compendio.`,
                         `\`!Zeliminarrupias @Usuario "Personaje" <cantidad|all>\`: Elimina rupias del inventario.`,
                         `\n**— Gestión de Encuentros —**`,
                         `\`!Zcrearenemigo "Nombre" "HP" "URL" ["Mensaje"] [pluralizar_nombre]\`: Registra un enemigo base.`,
@@ -974,40 +973,6 @@ client.on('messageCreate', async message => {
         const row = createPaginationRow(currentPage, totalPages);
 
         message.channel.send({ embeds: [embed], components: [row] });
-    }
-
-    // --- NUEVO COMANDO: MOSTRAR ID INTERNA DEL ITEM (Público) ---
-    if (command === 'mostraritemid') {
-        const regex = /"([^"]+)"/;
-        const match = fullCommand.match(regex);
-
-        if (!match) {
-            return message.reply('Uso: `!Zmostraritemid "Nombre Completo del Objeto"`');
-        }
-
-        const nombreItem = match[1];
-        // 1. Generar el ID interno (clave limpia)
-        const id = generarKeyLimpia(nombreItem);
-
-        // 2. Intentar recuperar el item para confirmar que existe
-        const item = await compendioDB.get(id);
-
-        if (!item) {
-            return message.reply(`El objeto **${nombreItem}** no se encontró en el Compendio. Asegúrate de que el nombre esté escrito correctamente.`);
-        }
-
-        const embed = new EmbedBuilder()
-            .setColor(LIST_EMBED_COLOR)
-            .setTitle(`🔍 Identificador Interno (ID) de Item`)
-            .setDescription(`Esta es la clave única utilizada por el bot para identificar **${item.nombre}** en la base de datos y en los comandos de cofres/asignación.`)
-            .addFields(
-                { name: 'Nombre Registrado', value: item.nombre, inline: true },
-                { name: 'Tipo', value: item.tipo.toUpperCase(), inline: true },
-                { name: 'ID Interna (Clave)', value: `\`${id}\``, inline: false }
-            )
-            .setFooter({ text: 'Útil para comandos Staff como !Zcrearcofre' });
-
-        message.channel.send({ embeds: [embed] });
     }
 
     // --- COMANDO: CREAR PERSONAJE/TUPPER (Público) ---
