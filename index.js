@@ -50,7 +50,7 @@ const LINK_TREASURE_GIF = 'https://i.imgur.com/k2I3w9Y.gif'; // Un GIF estándar
 const compendioDB = new Keyv(process.env.REDIS_URL, { namespace: 'items' });
 const enemigosDB = new Keyv(process.env.REDIS_URL, { namespace: 'enemies' });
 // NOTA: Usamos 'personajesDB' en el código, pero en la sección de crear personaje usaste 'db.set'. Lo unifico a 'personajesDB'.
-const personajesDB = new Keyv(process.env.REDIS_URL, { namespace: 'personajes' }); 
+const personajesDB = new Keyv(process.env.REDIS_URL, { namespace: 'personajes' });
 
 // CONFIGURACIÓN DEL CLIENTE (EL BOT)
 const client = new Client({
@@ -128,7 +128,7 @@ async function agregarItemAInventario(key, item) {
     }
     if (!personaje.rupias) {
         // Usa el nombre que estableciste en el objeto al crearlo
-        personaje.rupias = personaje.rupia || 0; 
+        personaje.rupias = personaje.rupia || 0;
     }
 
     if (item.tipo === 'moneda') {
@@ -472,7 +472,7 @@ client.on('interactionCreate', async interaction => {
         for await (const [key] of personajesDB.iterator()) {
             if (key.startsWith(characterKeyPrefix)) {
                 // Obtener solo el nombre limpio del personaje desde la clave
-                allCharacterKeys.push(key.split(':')[1].replace(/_/g, ' ')); 
+                allCharacterKeys.push(key.split(':')[1].replace(/_/g, ' '));
             }
         }
 
@@ -561,7 +561,7 @@ client.on('interactionCreate', async interaction => {
         // Llamar a la función centralizada para manejar la asignación y el mensaje.
         return manejarAsignacionCofre(interaction.user.id, itemId, characterId, interaction);
     }
-    
+
     // 5. Lógica de Confirmación de Borrado de Personajes
     if (interaction.isButton() && interaction.customId.startsWith('confirm_delete_all_')) {
         const userId = interaction.customId.replace('confirm_delete_all_', '');
@@ -571,16 +571,16 @@ client.on('interactionCreate', async interaction => {
         }
 
         await interaction.deferUpdate();
-        
+
         // 1. Eliminar todos los personajes
         const deletedCount = await deleteAllPersonajes(userId);
-        
+
         // 2. Editar el mensaje original con la confirmación
         const confirmationEmbed = new EmbedBuilder()
             .setColor('#E82A2A')
             .setTitle(`🗑️ Eliminación Masiva Confirmada`)
             .setDescription(`Se han **eliminado permanentemente** **${deletedCount}** personajes (inventarios) vinculados a tu cuenta.`);
-        
+
         // El mensaje original de confirmación se reemplaza
         await interaction.message.edit({
             content: `El proceso de borrado de inventarios ha finalizado.`,
@@ -638,6 +638,7 @@ client.on('messageCreate', async message => {
                         `\`!Zeliminariteminv "Personaje" "Item"\`: Elimina un objeto de tu inventario.`,
                         `\`!Zlistaritems\`: Muestra el compendio de objetos (ordenado por fecha de creación).`,
                         `\`!Zlistarenemigos\`: Muestra el compendio de monstruos (con paginación).`,
+                        `\`!Zverenemigo "Nombre"\`: Muestra la ficha detallada de un enemigo.`,
                         `\`!Zveritem "Nombre"\`: Muestra la ficha detallada de un objeto.`,
                         `\`!Z-help\`: Muestra esta guía de comandos.`
                     ].join('\n'),
@@ -680,7 +681,7 @@ client.on('messageCreate', async message => {
         helpEmbed.setFooter({ text: 'Los comandos Staff requieren el rol de Staff o permisos de Administrador.' });
 
         // Se usa message.channel.send ya que se asume que el comando es en un canal público.
-        return message.channel.send({ embeds: [helpEmbed] }); 
+        return message.channel.send({ embeds: [helpEmbed] });
     }
 
     // --- COMANDO: CREAR ITEM (Staff) ---
@@ -876,7 +877,7 @@ client.on('messageCreate', async message => {
 
         message.channel.send({ embeds: [embed] });
     }
-    
+
     // --- NUEVO COMANDO: ELIMINAR PERSONAJE (Público) ---
     if (command === 'eliminarpersonaje') {
         // Se deja sin verificación de Staff para que cada usuario pueda eliminar sus tuppers.
@@ -907,7 +908,7 @@ client.on('messageCreate', async message => {
 
         return message.channel.send({ embeds: [embed] });
     }
-    
+
     // --- NUEVO COMANDO: BORRAR TODOS LOS PERSONAJES (Público, con confirmación) ---
     if (command === 'borrarpersonajes') {
         const userId = message.author.id;
@@ -920,7 +921,7 @@ client.on('messageCreate', async message => {
                 allCharacters.push(value.nombre);
             }
         }
-        
+
         if (allCharacters.length === 0) {
             return message.reply('No tienes ningún personaje (tupper) registrado para borrar.');
         }
@@ -929,10 +930,10 @@ client.on('messageCreate', async message => {
         const confirmEmbed = new EmbedBuilder()
             .setColor('#FF0000')
             .setTitle('⚠️ ¡ADVERTENCIA: BORRADO MASIVO! ⚠️')
-            .setDescription(`Estás a punto de **ELIMINAR PERMANENTEMENTE** todos tus ${allCharacters.length} personajes:\n\n` + 
-                            `**${allCharacters.join(', ')}**\n\n` +
-                            'Esta acción **no se puede deshacer** y perderás todos sus objetos y rupias.\n\n' + 
-                            '**Pulsa el botón de abajo para confirmar.**');
+            .setDescription(`Estás a punto de **ELIMINAR PERMANENTEMENTE** todos tus ${allCharacters.length} personajes:\n\n` +
+                `**${allCharacters.join(', ')}**\n\n` +
+                'Esta acción **no se puede deshacer** y perderás todos sus objetos y rupias.\n\n' +
+                '**Pulsa el botón de abajo para confirmar.**');
 
         const confirmRow = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
@@ -945,10 +946,10 @@ client.on('messageCreate', async message => {
                 .setStyle(ButtonStyle.Secondary)
         );
 
-        return message.reply({ 
+        return message.reply({
             content: `${message.author}, ¡Cuidado! Esta es una operación irreversible.`,
-            embeds: [confirmEmbed], 
-            components: [confirmRow] 
+            embeds: [confirmEmbed],
+            components: [confirmRow]
         });
     }
 
@@ -1033,7 +1034,7 @@ client.on('messageCreate', async message => {
         allCharacters.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 
         // 3. Generar la lista con el nuevo orden
-        const characterList = allCharacters.map((char, index) => 
+        const characterList = allCharacters.map((char, index) =>
             `**${index + 1}. ${char.nombre}** - ${char.objetos.length} objetos, ${char.rupias} rupias.`
         ).join('\n');
 
@@ -1153,7 +1154,7 @@ client.on('messageCreate', async message => {
 
         message.channel.send({ embeds: [embed] });
     }
-    
+
     // --- COMANDO: DAR ITEM A PERSONAJE (Staff) ---
     if (command === 'daritem') {
         if (!hasAdminPerms) {
@@ -1177,9 +1178,9 @@ client.on('messageCreate', async message => {
         if (!item) {
             return message.reply(`El objeto **${nombreItem}** no se encontró en el compendio.`);
         }
-        
+
         const personajeKey = generarPersonajeKey(targetUser.id, nombrePersonaje);
-        
+
         const success = await agregarItemAInventario(personajeKey, item);
 
         if (!success) {
@@ -1332,6 +1333,52 @@ client.on('messageCreate', async message => {
             .setColor('#cc0000')
             .setTitle(`🗑️ Enemigo Eliminado: ${enemigoEliminado.nombre}`)
             .setDescription(`El enemigo **${enemigoEliminado.nombre}** ha sido borrado permanentemente de la base de datos.`);
+
+        message.channel.send({ embeds: [embed] });
+    }
+
+    // --- COMANDO: LISTAR ENEMIGOS (Público) ---
+    if (command === 'listarenemigos') {
+        const enemies = await obtenerTodosEnemigos();
+
+        if (enemies.length === 0) {
+            return message.channel.send('***El Compendio de Monstruos está vacío. ¡Que se registre la primera criatura!***');
+        }
+
+        const currentPage = 0;
+        const { embed, totalPages } = createEnemyEmbedPage(enemies, currentPage);
+        const row = createPaginationRow(currentPage, totalPages);
+
+        message.channel.send({ embeds: [embed], components: [row] });
+    }
+
+    // --- COMANDO: VER ENEMIGO (Público) ---
+    if (command === 'verenemigo') {
+        const regex = /"([^"]+)"/;
+        const match = fullCommand.match(regex);
+
+        if (!match) {
+            return message.reply('Uso: `!Zverenemigo "Nombre Completo del Enemigo"`');
+        }
+
+        const nombreEnemigo = match[1];
+        const id = generarKeyLimpia(nombreEnemigo);
+        const enemigo = await enemigosDB.get(id);
+
+        if (!enemigo) {
+            return message.reply(`No se encontró ningún enemigo llamado **${nombreEnemigo}** en el Compendio de Monstruos.`);
+        }
+
+        const embed = new EmbedBuilder()
+            .setColor(ENEMY_EMBED_COLOR)
+            .setTitle(`👹 Ficha de Enemigo: ${enemigo.nombre}`)
+            .addFields(
+                { name: 'HP Base', value: enemigo.hp.toString(), inline: true },
+                { name: 'Mensaje de Aparición', value: enemigo.mensajeAparicion, inline: false },
+                { name: 'Pluralización Automática', value: enemigo.pluralizar_nombre ? 'Sí (añade "s")' : 'No (usa nombre base)', inline: true }
+            )
+            .setImage(enemigo.imagen)
+            .setFooter({ text: `Registrado por: ${enemigo.registradoPor || 'Desconocido'}` });
 
         message.channel.send({ embeds: [embed] });
     }
@@ -1500,21 +1547,6 @@ client.on('messageCreate', async message => {
 
         targetChannel.send({ embeds: [treasureEmbed], components: [row] });
         message.reply(`✅ **${cofre.nombre}** creado en ${targetChannel} con el item **${item.nombre}** dentro.`);
-    }
-
-    // --- COMANDO: LISTAR ENEMIGOS (Público) ---
-    if (command === 'listarenemigos') {
-        const enemies = await obtenerTodosEnemigos();
-
-        if (enemies.length === 0) {
-            return message.channel.send('***El Compendio de Monstruos está vacío. ¡Que se registre la primera criatura!***');
-        }
-
-        const currentPage = 0;
-        const { embed, totalPages } = createEnemyEmbedPage(enemies, currentPage);
-        const row = createPaginationRow(currentPage, totalPages);
-
-        message.channel.send({ embeds: [embed], components: [row] });
     }
 });
 
