@@ -90,8 +90,8 @@ function createItemEmbedPage(items, pageIndex) {
 
     itemsToShow.forEach(p => {
         embed.addFields({
-            name: `**${p.nombre}** (ID: ${p.id})`,
-            value: `**Tipo:** ${p.tipo.toUpperCase()} | **Estado:** ${p.disponible ? 'Disponible' : 'En Posesión'}`,
+            name: `**${p.nombre}**`,
+            value: `**ID:** ${p.id} | **Tipo:** ${p.tipo.toUpperCase()} | **Estado:** ${p.disponible ? 'Disponible' : 'En Posesión'}`,
             inline: false
         });
     });
