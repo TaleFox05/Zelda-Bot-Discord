@@ -15,8 +15,8 @@ const Keyv = require('keyv');
 // =========================================================================
 
 // COLORES DE EMBEDS
-const LIST_EMBED_COLOR = '#427522';       // Compendio y General
-const ENEMY_EMBED_COLOR = '#E82A2A';      // Enemigos (Rojo)
+const LIST_EMBED_COLOR = '#427522';      // Compendio y General
+const ENEMY_EMBED_COLOR = '#E82A2A';     // Enemigos (Rojo)
 const TREASURE_EMBED_COLOR = '#634024';   // Cofres (Marrón)
 const REWARD_EMBED_COLOR = '#F7BD28';     // Recompensa de Cofre 
 const PREFIX = '!Z';
@@ -146,65 +146,6 @@ async function agregarItemAInventario(key, item) {
 
     await personajesDB.set(key, personaje);
     return true;
-}
-
-/**
- * Otorga un ítem (o moneda) a un personaje, actualizando el inventario o el saldo.
- * * @param {object} personajeData - El objeto de datos del personaje a modificar.
- * @param {string} itemId - La ID interna (clave limpia) del ítem.
- * @param {number} cantidad - La cantidad a otorgar.
- * @returns {string} Mensaje describiendo el resultado de la acción.
- */
-async function otorgarItem(personajeData, itemId, cantidad) {
-    if (!personajeData || !itemId || cantidad <= 0) {
-        return "Error interno al otorgar ítem: datos incompletos.";
-    }
-
-    const itemData = await compendioDB.get(itemId);
-    if (!itemData) {
-        return `Error: El ítem con ID \`${itemId}\` no existe en el Compendio.`;
-    }
-
-    const itemNombre = itemData.nombre;
-
-    // 🚩 LÓGICA CLAVE: MANEJO DE MONEDAS
-    if (itemData.tipo === 'moneda') {
-        const valorNumerico = itemData.valor || 1; // Asegurar que tiene un valor, si no, usar 1 por defecto
-        const totalGanado = cantidad * valorNumerico;
-
-        // Asumiendo que el campo para el saldo del personaje es 'saldo' o 'rupias'
-        // Si tu campo es 'saldo', usa: personajeData.saldo = (personajeData.saldo || 0) + totalGanado;
-        // Si tu campo es 'rupias', usa: personajeData.rupias = (personajeData.rupias || 0) + totalGanado;
-
-        // **UTILIZAREMOS 'saldo' como nombre de campo por convención**
-        personajeData.saldo = (personajeData.saldo || 0) + totalGanado;
-
-        return `Ganaste ${totalGanado} Rupias (x${cantidad} ${itemNombre})`;
-    }
-
-    // LÓGICA ESTÁNDAR: MANEJO DE ÍTEMS FÍSICOS
-    else {
-        // Inicializar inventario si no existe
-        if (!personajeData.inventario) {
-            personajeData.inventario = [];
-        }
-
-        // Buscar si el ítem ya existe en el inventario
-        const index = personajeData.inventario.findIndex(i => i.id === itemId);
-
-        if (index > -1) {
-            // El ítem existe, solo aumentar la cantidad
-            personajeData.inventario[index].cantidad += cantidad;
-        } else {
-            // El ítem no existe, añadirlo nuevo
-            personajeData.inventario.push({
-                id: itemId,
-                cantidad: cantidad,
-                nombre: itemNombre // Opcional: guardar el nombre original para display rápido
-            });
-        }
-        return `Recibiste x${cantidad} ${itemNombre}`;
-    }
 }
 
 /**
@@ -599,7 +540,7 @@ client.on('interactionCreate', async interaction => {
         await interaction.deferUpdate({ ephemeral: false });
 
         const parts = interaction.customId.split('_');
-        // parts[2] contiene "itemId-tipoCofre"
+        // parts[2] contiene "itemId-tipoCofre" o simplemente "itemId"
         const fullItemIdAndChest = parts[2];
 
         // Extraer solo la parte del ID antes del primer guion (clave limpia)
@@ -617,40 +558,8 @@ client.on('interactionCreate', async interaction => {
             return interaction.followUp({ content: 'Esta asignación es solo para el usuario que abrió el cofre.', ephemeral: true });
         }
 
-        // --- 🎯 NUEVA LÓGICA DE ASIGNACIÓN (usando otorgarItem directamente aquí) ---
-        const personajeKey = `${interaction.user.id}:${characterId}`;
-        const personajeData = await personajesDB.get(personajeKey);
-
-        // **IMPORTANTE**: Necesitas el cofreData para saber la cantidad a otorgar.
-        // Dado que la lógica del cofre *no* almacena la cantidad de forma trivial en el customId,
-        // Asumiremos por ahora que el cofre solo da 1 unidad del item.
-        // **ESTO ES UN PUNTO A MEJORAR SI LOS COFRES DEBEN DAR MÚLTIPLES UNIDADES DE UN SOLO ÍTEM.**
-        const cantidad = 1;
-
-        if (!personajeData) {
-            return interaction.followUp({ content: `No se encontró el personaje **${characterId.replace(/_/g, ' ')}**.`, ephemeral: true });
-        }
-
-        const resultado = await otorgarItem(personajeData, itemId, cantidad);
-
-        // Guardar los cambios del personaje (que ahora incluye el nuevo saldo/inventario)
-        await personajesDB.set(personajeKey, personajeData);
-
-        // Finalizar la interacción y mostrar los resultados
-        const embedResultado = new EmbedBuilder()
-            .setColor(SUCCESS_EMBED_COLOR)
-            .setTitle(`✅ Tesoro Asignado`)
-            .setDescription(`El tesoro ha sido asignado a **${personajeData.nombre}**.\n\n${resultado}`)
-            .setFooter({ text: 'Inventario/Saldo actualizado.' });
-
-        await interaction.message.edit({
-            content: `El tesoro ha sido asignado.`,
-            embeds: [embedResultado],
-            components: [] // Eliminar el menú desplegable
-        });
-
-        return;
-        // --- FIN DE LA NUEVA LÓGICA ---
+        // Llamar a la función centralizada para manejar la asignación y el mensaje.
+        return manejarAsignacionCofre(interaction.user.id, itemId, characterId, interaction);
     }
 
     // 5. Lógica de Confirmación de Borrado de Personajes
@@ -685,66 +594,17 @@ client.on('interactionCreate', async interaction => {
 });
 
 client.on('messageCreate', async message => {
-    // Ignorar si el mensaje es de un bot
     if (message.author.bot) return;
 
-    // Asumiendo que tu prefijo es la variable 'prefix' (ej: '!Z')
-    if (!message.content.startsWith(prefix)) return;
+    // Nota: hasAdminPerms utiliza 'message.member.roles.cache.has' y 'message.member.permissions.has'.
+    // Esta verificación solo funciona en servidores.
+    const hasAdminPerms = message.member && (message.member.roles.cache.has(ADMIN_ROLE_ID) || message.member.permissions.has(PermissionsBitField.Flags.Administrator));
 
-    // 1. Separar el prefijo del resto del mensaje
-    const messageContent = message.content.slice(prefix.length).trim();
+    if (!message.content.startsWith(PREFIX)) return;
 
-    // 2. Separar el comando del resto de los argumentos
-    const parts = messageContent.split(/\s+/);
-    const command = parts[0].toLowerCase();
-
-    // 3. Reconstruir el fullCommand y args para el switch/if de abajo
-    const args = messageContent.slice(command.length).trim();
-    const fullCommand = command + ' ' + args;
-
-    // --- COMANDO: CREAR COFRE (Staff - Corregido y Simplificado) ---
-    if (command === 'crearcofre') {
-        // Asegurar que solo Staff puede usar este comando
-        if (!message.member.roles.cache.has(STAFF_ROLE_ID)) {
-            return message.reply('❌ Solo el Staff tiene permiso para crear cofres.');
-        }
-
-        // Regex simplificada para capturar: <CanalID>, "Tipo", e "ID_ITEM".
-        // La expresión busca un número, seguido por dos cadenas entre comillas.
-        const cofreRegex = /^(\d+)\s+"([^"]+)"\s+"([^"]+)"$/;
-        const cofreMatch = args.match(cofreRegex);
-
-        if (!cofreMatch) {
-            return message.reply('Uso: `!Zcrearcofre <ID Canal> "Tipo (pequeño/grande/jefe)" "ID_ITEM"`');
-        }
-
-        const canalID = cofreMatch[1];
-        const tipoCofre = cofreMatch[2];
-        const itemId = cofreMatch[3]; // Ahora es una ID simple
-
-        // 🚩 VALIDACIÓN CLAVE: Verificar que la ID del ítem existe
-        const itemData = await compendioDB.get(itemId);
-
-        if (!itemData) {
-            return message.reply(`⛔ Error: La ID de ítem \`${itemId}\` no existe en el Compendio. Usa \`!Zmostraritemid\` para verificar la ID.`);
-        }
-
-        // Creamos el objeto 'items' con la ID como clave y cantidad 1
-        const items = { [itemId]: 1 };
-
-        const nuevoCofre = {
-            canalId: canalID,
-            tipo: tipoCofre,
-            items: items, // Objeto: { "ID_ITEM": 1 }
-            registradoPor: message.author.tag,
-            fechaCreacion: new Date().toISOString()
-        };
-
-        const cofreKey = generarKeyLimpia(tipoCofre + '_' + canalID);
-        await cofresDB.set(cofreKey, nuevoCofre);
-
-        message.channel.send({ content: `✅ Cofre **${tipoCofre}** creado exitosamente para el canal **${canalID}**. Contiene: **x1 ${itemData.nombre}** (ID: \`${itemId}\`).` });
-    }
+    const fullCommand = message.content.slice(PREFIX.length).trim();
+    const args = fullCommand.split(/ +/);
+    const command = args.shift().toLowerCase();
 
 
     // --- COMANDO: HELP ---
@@ -760,7 +620,6 @@ client.on('messageCreate', async message => {
                         `\`!Zcrearitem "Nombre" "Desc" "Tipo" "URL" ["ValorRupia"]\`: Registra un nuevo objeto.`,
                         `\`!Zeliminaritem "Nombre"\`: Borra un objeto.`,
                         `\`!Zdaritem @Usuario "Personaje" "ItemNombre"\`: Asigna un item del compendio al inventario de un personaje.`,
-                        `\`!Zmostraritemid "Nombre"\`: Muestra la ID (clave interna) de un objeto del compendio.`,
                         `\`!Zeliminarrupias @Usuario "Personaje" <cantidad|all>\`: Elimina rupias del inventario.`,
                         `\n**— Gestión de Encuentros —**`,
                         `\`!Zcrearenemigo "Nombre" "HP" "URL" ["Mensaje"] [pluralizar_nombre]\`: Registra un enemigo base.`,
@@ -781,6 +640,7 @@ client.on('messageCreate', async message => {
                         `\`!Zlistarenemigos\`: Muestra el compendio de monstruos (con paginación).`,
                         `\`!Zverenemigo "Nombre"\`: Muestra la ficha detallada de un enemigo.`,
                         `\`!Zveritem "Nombre"\`: Muestra la ficha detallada de un objeto.`,
+                        `\`!Zmostraritemid "Nombre"\`: Muestra la ID (clave interna) de un objeto del compendio.`,
                         `\`!Z-help\`: Muestra esta guía de comandos.`
                     ].join('\n'),
                     inline: false
@@ -961,21 +821,6 @@ client.on('messageCreate', async message => {
         message.channel.send({ embeds: [embed] });
     }
 
-    // --- COMANDO: LISTAR ITEMS (Público) ---
-    if (command === 'listaritems') {
-        const items = await obtenerTodosItems();
-
-        if (items.length === 0) {
-            return message.channel.send('***El Compendio de Objetos está vacío. ¡Que se registre el primer tesoro!***');
-        }
-
-        const currentPage = 0;
-        const { embed, totalPages } = createItemEmbedPage(items, currentPage);
-        const row = createPaginationRow(currentPage, totalPages);
-
-        message.channel.send({ embeds: [embed], components: [row] });
-    }
-
     // --- NUEVO COMANDO: MOSTRAR ID INTERNA DEL ITEM (Público) ---
     if (command === 'mostraritemid') {
         const regex = /"([^"]+)"/;
@@ -1008,6 +853,21 @@ client.on('messageCreate', async message => {
             .setFooter({ text: 'Útil para comandos Staff como !Zcrearcofre' });
 
         message.channel.send({ embeds: [embed] });
+    }
+
+    // --- COMANDO: LISTAR ITEMS (Público) ---
+    if (command === 'listaritems') {
+        const items = await obtenerTodosItems();
+
+        if (items.length === 0) {
+            return message.channel.send('***El Compendio de Objetos está vacío. ¡Que se registre el primer tesoro!***');
+        }
+
+        const currentPage = 0;
+        const { embed, totalPages } = createItemEmbedPage(items, currentPage);
+        const row = createPaginationRow(currentPage, totalPages);
+
+        message.channel.send({ embeds: [embed], components: [row] });
     }
 
     // --- COMANDO: CREAR PERSONAJE/TUPPER (Público) ---
@@ -1481,52 +1341,6 @@ client.on('messageCreate', async message => {
         message.channel.send({ embeds: [embed] });
     }
 
-    // --- COMANDO: ELIMINAR ENEMIGO (Staff) ---
-    if (command === 'eliminarenemigo') {
-        if (!hasAdminPerms) {
-            return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden eliminar enemigos.');
-        }
-
-        const regex = /"([^"]+)"/;
-        const match = fullCommand.match(regex);
-
-        if (!match) {
-            return message.reply('Uso: `!Zeliminarenemigo "Nombre Completo del Enemigo"`');
-        }
-
-        const nombreEnemigo = match[1];
-        const id = generarKeyLimpia(nombreEnemigo);
-
-        const enemigoEliminado = await enemigosDB.get(id);
-        if (!enemigoEliminado) {
-            return message.reply(`No se encontró ningún enemigo llamado **${nombreEnemigo}** en la base de datos.`);
-        }
-
-        await enemigosDB.delete(id);
-
-        const embed = new EmbedBuilder()
-            .setColor('#cc0000')
-            .setTitle(`🗑️ Enemigo Eliminado: ${enemigoEliminado.nombre}`)
-            .setDescription(`El enemigo **${enemigoEliminado.nombre}** ha sido borrado permanentemente de la base de datos.`);
-
-        message.channel.send({ embeds: [embed] });
-    }
-
-    // --- COMANDO: LISTAR ENEMIGOS (Público) ---
-    if (command === 'listarenemigos') {
-        const enemies = await obtenerTodosEnemigos();
-
-        if (enemies.length === 0) {
-            return message.channel.send('***El Compendio de Monstruos está vacío. ¡Que se registre la primera criatura!***');
-        }
-
-        const currentPage = 0;
-        const { embed, totalPages } = createEnemyEmbedPage(enemies, currentPage);
-        const row = createPaginationRow(currentPage, totalPages);
-
-        message.channel.send({ embeds: [embed], components: [row] });
-    }
-
     // --- COMANDO: VER ENEMIGO (Público) ---
     if (command === 'verenemigo') {
         const regex = /"([^"]+)"/;
@@ -1554,6 +1368,37 @@ client.on('messageCreate', async message => {
             )
             .setImage(enemigo.imagen)
             .setFooter({ text: `Registrado por: ${enemigo.registradoPor || 'Desconocido'}` });
+
+        message.channel.send({ embeds: [embed] });
+    }
+
+    // --- COMANDO: ELIMINAR ENEMIGO (Staff) ---
+    if (command === 'eliminarenemigo') {
+        if (!hasAdminPerms) {
+            return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden eliminar enemigos.');
+        }
+
+        const regex = /"([^"]+)"/;
+        const match = fullCommand.match(regex);
+
+        if (!match) {
+            return message.reply('Uso: `!Zeliminarenemigo "Nombre Completo del Enemigo"`');
+        }
+
+        const nombreEnemigo = match[1];
+        const id = generarKeyLimpia(nombreEnemigo);
+
+        const enemigoEliminado = await enemigosDB.get(id);
+        if (!enemigoEliminado) {
+            return message.reply(`No se encontró ningún enemigo llamado **${nombreEnemigo}** en la base de datos.`);
+        }
+
+        await enemigosDB.delete(id);
+
+        const embed = new EmbedBuilder()
+            .setColor('#cc0000')
+            .setTitle(`🗑️ Enemigo Eliminado: ${enemigoEliminado.nombre}`)
+            .setDescription(`El enemigo **${enemigoEliminado.nombre}** ha sido borrado permanentemente de la base de datos.`);
 
         message.channel.send({ embeds: [embed] });
     }
@@ -1668,48 +1513,75 @@ client.on('messageCreate', async message => {
         message.reply(`✅ **${cantidad}x ${enemigoBase.nombre}** invocado(s) en ${targetChannel}${sinBotones ? ' (sin botones de acción)' : ''}.`);
     }
 
-    // --- CORRECCIÓN Y SIMPLIFICACIÓN: COMANDO CREAR COFRE ---
+    // --- COMANDO: CREAR COFRE (Staff) - MODIFICADO BOTÓN CUSTOM ID
     if (command === 'crearcofre') {
-        // Asegurar que solo Staff puede usar este comando
-        if (!message.member.roles.cache.has(STAFF_ROLE_ID)) {
-            return message.reply('❌ Solo el Staff tiene permiso para crear cofres.');
+        if (!hasAdminPerms) {
+            return message.reply('¡Solo los Administradores Canon pueden crear cofres!');
         }
 
-        const args = fullCommand.slice(prefix.length + command.length).trim();
-        // Regex simplificada para capturar: <CanalID>, "Tipo", e "ID_ITEM".
-        const cofreRegex = /^(\d+)\s+"([^"]+)"\s+"([^"]+)"$/;
-        const cofreMatch = args.match(cofreRegex);
+        const fullCommandContent = message.content.slice(PREFIX.length + command.length).trim();
 
-        if (!cofreMatch) {
-            return message.reply('Uso: `!Zcrearcofre <ID Canal> "Tipo (pequeño/grande/jefe)" "ID_ITEM"`');
+        const argsList = fullCommandContent.split(/\s+/);
+        const canalId = argsList[0].replace(/<#|>/g, '');
+
+        const quotedRegex = /"([^"]+)"/g;
+        const matches = [...fullCommandContent.matchAll(quotedRegex)];
+
+        if (!canalId || matches.length < 2) {
+            return message.reply('Sintaxis incorrecta. Uso: `!Zcrearcofre <CanalID> "Tipo (pequeño/grande/jefe)" "Nombre del Item"`');
         }
 
-        const canalID = cofreMatch[1];
-        const tipoCofre = cofreMatch[2];
-        const itemId = cofreMatch[3]; // Ahora es una ID simple
+        const tipoCofre = matches[0][1].toLowerCase();
+        const nombreItem = matches[1][1];
+        const itemId = generarKeyLimpia(nombreItem);
 
-        // 🚩 VALIDACIÓN CLAVE: Verificar que la ID del ítem existe
-        const itemData = await compendioDB.get(itemId);
+        const cofre = CHEST_TYPES[tipoCofre];
+        const item = await compendioDB.get(itemId);
 
-        if (!itemData) {
-            return message.reply(`⛔ Error: La ID de ítem \`${itemId}\` no existe en el Compendio. Usa \`!Zmostraritemid\` para verificar la ID.`);
+        if (!cofre) {
+            return message.reply(`Tipo de cofre inválido. Tipos permitidos: \`${Object.keys(CHEST_TYPES).join(', ')}\`.`);
+        }
+        if (!item) {
+            return message.reply(`El item **${nombreItem}** no está registrado en el compendio.`);
         }
 
-        // Creamos el objeto 'items' con la ID como clave y cantidad 1
-        const items = { [itemId]: 1 };
+        const targetChannel = client.channels.cache.get(canalId);
+        if (!targetChannel) {
+            return message.reply('No se pudo encontrar ese Canal ID. Asegúrate de que el bot tenga acceso.');
+        }
 
-        const nuevoCofre = {
-            canalId: canalID,
-            tipo: tipoCofre,
-            items: items, // Objeto: { "ID_ITEM": 1 }
-            registradoPor: message.author.tag,
-            fechaCreacion: new Date().toISOString()
-        };
+        const treasureEmbed = new EmbedBuilder()
+            .setColor(TREASURE_EMBED_COLOR)
+            .setTitle(`🔑 ¡Tesoro Encontrado! 🎁`)
+            .setDescription(`¡Un cofre ha aparecido de la nada! ¡Ábrelo para revelar el tesoro!`)
+            .setThumbnail(cofre.img)
+            .setFooter({ text: `Pulsa el botón para interactuar. Contiene: ${item.nombre}` }); // Pequeño spoiler para staff
 
-        const cofreKey = generarKeyLimpia(tipoCofre + '_' + canalID);
-        await cofresDB.set(cofreKey, nuevoCofre);
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                // El custom ID ahora lleva el item ID y el tipo de cofre
+                .setCustomId(`open_chest_${itemId}-${tipoCofre}`)
+                .setLabel(`Abrir ${cofre.nombre}`)
+                .setStyle(ButtonStyle.Success)
+        );
 
-        message.channel.send({ content: `✅ Cofre **${tipoCofre}** creado exitosamente para el canal **${canalID}**. Contiene: **x1 ${itemData.nombre}** (ID: \`${itemId}\`).` });
+        targetChannel.send({ embeds: [treasureEmbed], components: [row] });
+        message.reply(`✅ **${cofre.nombre}** creado en ${targetChannel} con el item **${item.nombre}** dentro.`);
+    }
+
+    // --- COMANDO: LISTAR ENEMIGOS (Público) ---
+    if (command === 'listarenemigos') {
+        const enemies = await obtenerTodosEnemigos();
+
+        if (enemies.length === 0) {
+            return message.channel.send('***El Compendio de Monstruos está vacío. ¡Que se registre la primera criatura!***');
+        }
+
+        const currentPage = 0;
+        const { embed, totalPages } = createEnemyEmbedPage(enemies, currentPage);
+        const row = createPaginationRow(currentPage, totalPages);
+
+        message.channel.send({ embeds: [embed], components: [row] });
     }
 });
 
