@@ -1,360 +1,790 @@
-import { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType } from 'discord.js';
-import { Level } from 'level';
-import 'dotenv/config';
+// Carga la librería 'dotenv' para leer el archivo .env (donde está el Token secreto)
+require('dotenv').config();
 
-// --- CONFIGURACIÓN ---
+// Importa las clases necesarias de discord.js
+const {
+    Client, GatewayIntentBits, PermissionsBitField, EmbedBuilder,
+    ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder
+} = require('discord.js');
+
+// --- LIBRERÍAS DE PERSISTENCIA (KEYV/REDIS) ---
+const Keyv = require('keyv');
+
+// =========================================================================
+// === CONFIGURACIÓN Y DEFINICIONES ===
+// =========================================================================
+
+// COLORES DE EMBEDS
+const LIST_EMBED_COLOR = '#427522';      // Compendio y General
+const ENEMY_EMBED_COLOR = '#E82A2A';     // Enemigos (Rojo)
+const TREASURE_EMBED_COLOR = '#634024';   // Cofres (Marrón)
+const REWARD_EMBED_COLOR = '#F7BD28';     // Recompensa de Cofre 
 const PREFIX = '!Z';
-const ADMIN_ROLE_ID = process.env.ADMIN_ROLE_ID || '1420026299090731050'; // ¡IMPORTANTE! Reemplazar con el ID real del rol de Staff/Admin
-const REWARD_EMBED_COLOR = '#00ff00'; // Verde
-const ENEMY_EMBED_COLOR = '#ff0000'; // Rojo
-const LIST_EMBED_COLOR = '#0099ff'; // Azul
-const TREASURE_EMBED_COLOR = '#ffcc00'; // Dorado/Amarillo
-const PAGE_SIZE = 10;
 
-// Tipos de Cofre (para la invocación y el embed visual)
+// ID del rol de Administrador que puede usar los comandos de Staff
+const ADMIN_ROLE_ID = "1420026299090731050";
+
+// Palabras clave para la gestión
+const TIPOS_VALIDOS = ['moneda', 'objeto', 'keyitem'];
+
+// DEFINICIÓN DE COFRES
 const CHEST_TYPES = {
-    'pequeño': {
+    pequeño: {
         nombre: 'Cofre Pequeño',
-        img: 'https://placehold.co/100x100/ffcc00/000000?text=Cofre+P' // Placeholder
+        img: 'https://i.imgur.com/O6wo7s4.png'
     },
-    'grande': {
-        nombre: 'Cofre Grande',
-        img: 'https://placehold.co/100x100/ffcc00/000000?text=Cofre+G' // Placeholder
+    grande: {
+        nombre: 'Cofre de Mazmorra',
+        img: 'https://static.wikia.nocookie.net/zelda_gamepedia_en/images/0/0f/MM3D_Chest.png/revision/latest/scale-to-width/360?cb=20201125233413'
     },
-    'jefe': {
-        nombre: 'Cofre de Jefe',
-        img: 'https://placehold.co/100x100/ffcc00/000000?text=Cofre+J' // Placeholder
-    },
+    jefe: {
+        nombre: 'Cofre de Llave Maestra',
+        img: 'https://frommetolu.wordpress.com/wp-content/uploads/2012/01/treasure_chest_n64.png'
+    }
 };
 
+// GIF DE LINK LEVANTANDO EL TESORO (Para la recompensa final del cofre)
+const LINK_TREASURE_GIF = 'https://media.tenor.com/LjpodfXOBj4AAAAj/8bit-link.gif'; // Un GIF estándar de Link levantando algo
 
-// --- BASE DE DATOS ---
-const personajesDB = new Level('./db/personajes', { valueEncoding: 'json' });
-const compendioDB = new Level('./db/compendio', { valueEncoding: 'json' });
-const enemigosDB = new Level('./db/enemigos', { valueEncoding: 'json' });
+// --- ESTRUCTURA DE DATOS: KEYV (REDIS) ---
+const compendioDB = new Keyv(process.env.REDIS_URL, { namespace: 'items' });
+const enemigosDB = new Keyv(process.env.REDIS_URL, { namespace: 'enemies' });
+// NOTA: Usamos 'personajesDB' en el código, pero en la sección de crear personaje usaste 'db.set'. Lo unifico a 'personajesDB'.
+const personajesDB = new Keyv(process.env.REDIS_URL, { namespace: 'personajes' });
 
-
-// --- CLIENTE DISCORD ---
+// CONFIGURACIÓN DEL CLIENTE (EL BOT)
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMessageReactions,
     ]
 });
 
-// --- FUNCIONES DE UTILIDAD ---
+// =========================================================================
+// === FUNCIONES ASÍNCRONAS DE DATOS Y AYUDA ===
+// =========================================================================
 
-/**
- * Genera una clave limpia, minúscula y sin espacios a partir de un string.
- * @param {string} str El string a limpiar.
- * @returns {string} La clave limpia.
- */
-function generarKeyLimpia(str) {
-    return str.toLowerCase().replace(/\s/g, '_');
+async function obtenerTodosEnemigos() {
+    const enemies = {};
+    for await (const [key, value] of enemigosDB.iterator()) {
+        enemies[key] = value;
+    }
+    return Object.values(enemies);
+}
+
+async function obtenerTodosItems() {
+    const items = {};
+    for await (const [key, value] of compendioDB.iterator()) {
+        items[key] = value;
+    }
+    const itemsArray = Object.values(items);
+
+    itemsArray.sort((a, b) => (a.fechaCreacionMs || 0) - (b.fechaCreacionMs || 0));
+
+    return itemsArray;
 }
 
 /**
- * Genera la clave única para un personaje (userId:nombreLimpio).
- * @param {string} userId ID del usuario propietario.
- * @param {string} nombre Nombre del personaje.
- * @returns {string} La clave única.
+ * Genera la clave limpia para cualquier entrada de la DB (Item o Personaje).
+ * @param {string} nombre - El nombre con espacios, apóstrofes, etc.
+ * @returns {string} La clave limpia (ej: 'rupia_azul').
  */
-function generarPersonajeKey(userId, nombre) {
-    return `${userId}:${generarKeyLimpia(nombre)}`;
+function generarKeyLimpia(nombre) {
+    // Convierte a minúsculas, reemplaza espacios con guiones bajos,
+    // y elimina cualquier carácter que no sea letra, número o guion bajo.
+    return nombre.toLowerCase()
+        .replace(/ /g, '_')
+        .replace(/[^a-z0-9_]/g, '');
 }
 
 /**
- * Añade un item al inventario de un personaje y actualiza la DB.
- * @param {string} personajeKey La clave única del personaje.
- * @param {object} item El objeto item a añadir.
- * @returns {Promise<boolean>} True si se añadió, False si el personaje no existe.
+ * Genera la clave única para un personaje/tupper.
+ * @param {string} userId - La ID de Discord del usuario propietario.
+ * @param {string} nombrePersonaje - El nombre del tupper (personaje).
+ * @returns {string} La clave única compuesta.
  */
-async function agregarItemAInventario(personajeKey, item) {
-    try {
-        let personaje = await personajesDB.get(personajeKey);
+function generarPersonajeKey(userId, nombrePersonaje) {
+    const nombreLimpio = generarKeyLimpia(nombrePersonaje); // Usar la nueva función
+    return `${userId}:${nombreLimpio}`;
+}
 
-        // Clonar el item para asegurar que si se modifica, no afecte la versión del compendio.
-        const itemCopy = JSON.parse(JSON.stringify(item));
-        
-        // Asignar un ID único (basado en timestamp) si no lo tiene (para diferenciar stacks)
-        itemCopy.itemId = Date.now(); 
+/**
+ * Añade un objeto al inventario de un personaje.
+ * @param {string} key - La clave única del personaje (userId:nombre).
+ * @param {object} item - El objeto a añadir (de compendioDB).
+ * @returns {Promise<boolean>} True si se añadió, false si no se encontró el personaje.
+ */
+async function agregarItemAInventario(key, item) {
+    let personaje = await personajesDB.get(key);
 
-        if (!personaje.objetos) {
-            personaje.objetos = [];
-        }
-        personaje.objetos.push(itemCopy);
-        await personajesDB.set(personajeKey, personaje);
-        return true;
-    } catch (error) {
-        if (error.code === 'NotFoundError') {
-            return false;
-        }
-        console.error('Error al agregar item al inventario:', error);
+    if (!personaje) {
         return false;
     }
-}
 
-/**
- * Obtiene todos los items del compendio de la DB.
- * @returns {Promise<Array<object>>} Lista de todos los items.
- */
-async function obtenerTodosItems() {
-    const items = [];
-    for await (const [, value] of compendioDB.iterator()) {
-        items.push(value);
+    if (!personaje.objetos) {
+        personaje.objetos = [];
     }
-    return items;
-}
-
-/**
- * Obtiene todos los enemigos de la DB.
- * @returns {Promise<Array<object>>} Lista de todos los enemigos.
- */
-async function obtenerTodosEnemigos() {
-    const enemigos = [];
-    for await (const [, value] of enemigosDB.iterator()) {
-        enemigos.push(value);
+    if (!personaje.rupias) {
+        // Usa el nombre que estableciste en el objeto al crearlo
+        personaje.rupias = personaje.rupia || 0;
     }
-    return enemigos;
+
+    if (item.tipo === 'moneda') {
+        // LÓGICA DE MONEDA: Suma el valor al contador de rupias
+        personaje.rupias += (item.valorRupia || 1);
+    } else {
+        // LÓGICA DE OBJETO NORMAL: Añade el item a la lista
+        const itemEnInventario = {
+            nombre: item.nombre,
+            id: generarKeyLimpia(item.nombre), // Usar la función de limpieza
+            tipo: item.tipo,
+        };
+        personaje.objetos.push(itemEnInventario);
+    }
+
+    await personajesDB.set(key, personaje);
+    return true;
 }
 
 /**
- * Crea un embed paginado para la lista de items.
- * @param {Array<object>} items Lista de items.
- * @param {number} pageNumber Número de página actual.
- * @returns {{embed: EmbedBuilder, totalPages: number}}
+ * Realiza la migración de rupias de un inventario existente.
+ * Busca items de tipo 'moneda' en el inventario de objetos y los transfiere al contador de rupias.
+ * @param {object} personaje - El objeto del personaje a migrar.
+ * @returns {Promise<boolean>} True si se realizó alguna migración.
  */
-function createItemEmbedPage(items, pageNumber) {
-    const totalPages = Math.ceil(items.length / PAGE_SIZE);
-    const startIndex = pageNumber * PAGE_SIZE;
-    const currentItems = items.slice(startIndex, startIndex + PAGE_SIZE);
+async function migrarRupias(personaje) {
+    if (!personaje || !personaje.objetos || !personaje.propietarioId || !personaje.nombre) {
+        return false;
+    }
 
-    const itemList = currentItems.map((item, index) =>
-        `**${startIndex + index + 1}. ${item.nombre}**\n *${item.descripcion.slice(0, 70)}${item.descripcion.length > 70 ? '...' : ''}*`
-    ).join('\n\n') || '*(El compendio está vacío)*';
+    let itemsNoMoneda = [];
+    let cambiosRealizados = false;
 
-    const embed = new EmbedBuilder()
-        .setColor(LIST_EMBED_COLOR)
-        .setTitle(`📜 Compendio de Items (${items.length} en total)`)
-        .setDescription(itemList)
-        .setFooter({ text: `Página ${pageNumber + 1} de ${totalPages}` });
+    // Obtener todas las claves de items del compendio para no hacer llamadas individuales dentro del loop
+    const compendioItems = {};
+    for await (const [key, value] of compendioDB.iterator()) {
+        compendioItems[key] = value;
+    }
 
-    return { embed, totalPages };
+    for (const item of personaje.objetos) {
+        const itemBase = compendioItems[item.id];
+
+        if (itemBase && itemBase.tipo === 'moneda') {
+            // Migra la rupia
+            personaje.rupias = (personaje.rupias || 0) + (itemBase.valorRupia || 1);
+            cambiosRealizados = true;
+        } else {
+            // Es un objeto normal o un item obsoleto (sin entrada en compendio)
+            itemsNoMoneda.push(item);
+        }
+    }
+
+    if (cambiosRealizados) {
+        personaje.objetos = itemsNoMoneda; // Reemplazar con la lista filtrada
+        const personajeKey = generarPersonajeKey(personaje.propietarioId, personaje.nombre);
+        await personajesDB.set(personajeKey, personaje);
+    }
+
+    return cambiosRealizados;
 }
 
 /**
- * Crea un embed paginado para la lista de enemigos.
- * @param {Array<object>} enemies Lista de enemigos.
- * @param {number} pageNumber Número de página actual.
- * @returns {{embed: EmbedBuilder, totalPages: number}}
+ * Intenta obtener la URL del avatar de un Tupper (Webhook/APP) buscando en mensajes recientes.
+ * @param {Client} client - El cliente de Discord.
+ * @param {string} characterName - El nombre del personaje (Tupper).
+ * @param {GuildMember} member - El miembro de Discord que ejecuta el comando.
+ * @returns {Promise<string>} La URL del avatar.
  */
-function createEnemyEmbedPage(enemies, pageNumber) {
-    const totalPages = Math.ceil(enemies.length / PAGE_SIZE);
-    const startIndex = pageNumber * PAGE_SIZE;
-    const currentEnemies = enemies.slice(startIndex, startIndex + PAGE_SIZE);
+async function getTupperAvatar(client, characterName, member) {
+    // Si la foto del usuario es el fallback
+    const fallbackAvatar = member.user.displayAvatarURL({ dynamic: true });
 
-    const enemyList = currentEnemies.map((enemy, index) =>
-        `**${startIndex + index + 1}. ${enemy.nombre}** | HP Base: ${enemy.hp}`
-    ).join('\n') || '*(El compendio está vacío)*';
+    // Si el usuario no tiene un mensaje reciente, no podemos buscar el canal
+    if (!member.lastMessage || !member.lastMessage.channelId) {
+        return fallbackAvatar;
+    }
 
-    const embed = new EmbedBuilder()
-        .setColor(LIST_EMBED_COLOR)
-        .setTitle(`👹 Compendio de Monstruos (${enemies.length} en total)`)
-        .setDescription(enemyList)
-        .setFooter({ text: `Página ${pageNumber + 1} de ${totalPages}` });
+    try {
+        // Busca en los últimos 50 mensajes del canal donde el usuario interactuó
+        const channel = member.guild.channels.cache.get(member.lastMessage.channelId);
+        if (!channel) return fallbackAvatar;
 
-    return { embed, totalPages };
+        const messages = await channel.messages.fetch({ limit: 50 });
+
+        // Buscamos un mensaje que sea de un Webhook/App (Tupper)
+        const tupperMessage = messages.find(msg =>
+            msg.webhookId &&
+            msg.author.username.toLowerCase() === characterName.toLowerCase() // El webhook usa el nombre del tupper como username
+        );
+
+        if (tupperMessage && tupperMessage.author.avatarURL) {
+            // El bot detectó la foto del webhook del tupper
+            return tupperMessage.author.avatarURL({ dynamic: true });
+        }
+    } catch (error) {
+        // console.error(`Error buscando avatar de Tupper ${characterName}:`, error.message);
+    }
+
+    // Si no lo encuentra, usa el avatar del usuario
+    return fallbackAvatar;
+}
+
+/**
+ * ELIMINA TODOS los personajes (inventarios) de un usuario.
+ * Se usa para el comando !Zborrarpersonajes.
+ * @param {string} userId - La ID de Discord del usuario.
+ * @returns {Promise<number>} La cantidad de personajes eliminados.
+ */
+async function deleteAllPersonajes(userId) {
+    const keysToDelete = [];
+    const characterKeyPrefix = `${userId}:`;
+    let count = 0;
+
+    for await (const [key] of personajesDB.iterator()) {
+        if (key.startsWith(characterKeyPrefix)) {
+            keysToDelete.push(key);
+            count++;
+        }
+    }
+
+    for (const key of keysToDelete) {
+        await personajesDB.delete(key);
+    }
+
+    return count;
 }
 
 
-/**
- * Crea la fila de botones de paginación.
- * @param {number} currentPage Página actual (0-indexed).
- * @param {number} totalPages Total de páginas.
- * @returns {ActionRowBuilder} La fila de botones.
- */
+// =========================================================================
+// === LÓGICA DE PAGINACIÓN / EMBEDS ===
+// =========================================================================
+
 function createPaginationRow(currentPage, totalPages) {
-    const row = new ActionRowBuilder().addComponents(
+    return new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-            .setCustomId('prev_page')
-            .setLabel('Anterior')
+            .setCustomId('first')
+            .setEmoji('⏮️')
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(currentPage === 0),
         new ButtonBuilder()
-            .setCustomId('next_page')
-            .setLabel('Siguiente')
+            .setCustomId('prev')
+            .setEmoji('◀️')
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(currentPage === 0),
+        new ButtonBuilder()
+            .setCustomId('next')
+            .setEmoji('▶️')
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(currentPage === totalPages - 1),
+        new ButtonBuilder()
+            .setCustomId('last')
+            .setEmoji('⏭️')
             .setStyle(ButtonStyle.Secondary)
-            .setDisabled(currentPage >= totalPages - 1)
+            .setDisabled(currentPage === totalPages - 1)
     );
-    return row;
 }
 
-// --- MANEJADOR DE EVENTOS READY ---
-client.on('ready', () => {
-    console.log(`Bot iniciado como ${client.user.tag}`);
-    client.user.setActivity('¡Zelda RPG Activo!');
-});
+function createItemEmbedPage(items, pageIndex) {
+    const ITEMS_PER_PAGE = 5;
+    const start = pageIndex * ITEMS_PER_PAGE;
+    const end = start + ITEMS_PER_PAGE;
+    const itemsToShow = items.slice(start, end);
+    const totalPages = Math.ceil(items.length / ITEMS_PER_PAGE);
 
-// --- MANEJADOR DE INTERACCIONES (BOTONES) ---
-client.on('interactionCreate', async interaction => {
-    if (!interaction.isButton()) return;
+    const embed = new EmbedBuilder()
+        .setColor(LIST_EMBED_COLOR)
+        .setTitle('🏰 Compendio de Objetos de Nuevo Hyrule 🏰')
+        .setDescription(`*Página ${pageIndex + 1} de ${totalPages}. Solo se muestran ${ITEMS_PER_PAGE} objetos por página.*`)
+        .setFooter({ text: `Página ${pageIndex + 1} de ${totalPages} | Consultado vía Zelda BOT | Usa los botones para navegar.` });
 
-    // --- MANEJO DE PAGINACIÓN DE LISTAS ---
-    if (interaction.customId === 'prev_page' || interaction.customId === 'next_page') {
-        // Asumimos que la paginación viene de un embed
-        const embed = interaction.message.embeds[0];
-        const footerText = embed.footer.text;
+    itemsToShow.forEach(p => {
+        embed.addFields({
+            name: `**${p.nombre}**`,
+            value: `**Descripción:** *${p.descripcion}*\n**Tipo:** ${p.tipo.toUpperCase()} | **Estado:** ${p.disponible ? 'Disponible' : 'En Posesión'}`,
+            inline: false
+        });
+    });
 
-        const match = footerText.match(/Página (\d+) de (\d+)/);
-        if (!match) return interaction.reply({ content: 'Error de paginación.', ephemeral: true });
+    return { embed, totalPages };
+}
 
-        let currentPage = parseInt(match[1]) - 1; // 0-indexed
-        const totalPages = parseInt(match[2]);
+function createEnemyEmbedPage(enemies, pageIndex) {
+    const ENEMIES_PER_PAGE = 5;
+    const start = pageIndex * ENEMIES_PER_PAGE;
+    const end = start + ENEMIES_PER_PAGE;
+    const enemiesToShow = enemies.slice(start, end);
+    const totalPages = Math.ceil(enemies.length / ENEMIES_PER_PAGE);
 
-        if (interaction.customId === 'next_page') {
-            currentPage++;
-        } else if (interaction.customId === 'prev_page') {
-            currentPage--;
-        }
+    const embed = new EmbedBuilder()
+        .setColor(ENEMY_EMBED_COLOR)
+        .setTitle('👹 Compendio de Monstruos de Nuevo Hyrule ⚔️')
+        .setDescription(`*Página ${pageIndex + 1} de ${totalPages}. Solo se muestran ${ENEMIES_PER_PAGE} enemigos por página.*`)
+        .setFooter({ text: `Página ${pageIndex + 1} de ${totalPages} | Consultado vía Zelda BOT | Usa los botones para navegar.` });
 
-        // Determinar qué lista estamos paginando (Items o Enemigos)
-        let listType;
-        if (embed.title.includes('Compendio de Items')) {
-            listType = 'items';
-        } else if (embed.title.includes('Compendio de Monstruos')) {
-            listType = 'enemies';
-        } else {
-            return interaction.reply({ content: 'No se pudo identificar el tipo de lista.', ephemeral: true });
-        }
+    enemiesToShow.forEach(e => {
+        embed.addFields({
+            name: `**${e.nombre}**`,
+            value: `**HP Base:** ${e.hp}`,
+            inline: false
+        });
+    });
 
-        let newEmbed, newTotalPages, row;
-        if (listType === 'items') {
-            const items = await obtenerTodosItems();
-            ({ embed: newEmbed, totalPages: newTotalPages } = createItemEmbedPage(items, currentPage));
-        } else { // enemies
-            const enemies = await obtenerTodosEnemigos();
-            ({ embed: newEmbed, totalPages: newTotalPages } = createEnemyEmbedPage(enemies, currentPage));
-        }
+    return { embed, totalPages };
+}
 
-        row = createPaginationRow(currentPage, newTotalPages);
+/**
+ * Maneja la lógica de obtener el objeto del compendio, asignarlo al personaje
+ * y enviar el mensaje de confirmación (tanto para objetos como para monedas).
+ * @param {string} userId - ID del usuario.
+ * @param {string} itemId - ID limpio del item (ej: 'rupia_azul').
+ * @param {string} characterId - ID limpio del personaje (ej: 'mikato_tale_tsubashaki').
+ * @param {object} interaction - El objeto de la interacción (para responder/followUp).
+ */
+async function manejarAsignacionCofre(userId, itemId, characterId, interaction) {
+    const characterKey = generarPersonajeKey(userId, characterId);
+    const item = await compendioDB.get(itemId);
 
-        await interaction.update({ embeds: [newEmbed], components: [row] });
+    if (!item) {
+        return interaction.followUp({ content: `Error: El objeto con ID **${itemId}** ya no existe en el compendio.`, ephemeral: true });
     }
 
-    // --- MANEJO DE APERTURA DE COFRES ---
-    if (interaction.customId.startsWith('open_chest_')) {
-        const [itemId, tipoCofre] = interaction.customId.replace('open_chest_', '').split('-');
+    // --- LÓGICA CRÍTICA: AÑADIR ITEM AL INVENTARIO (incluye Rupias) ---
+    const success = await agregarItemAInventario(characterKey, item);
 
-        // Desactivar el botón para que solo una persona pueda abrirlo
-        await interaction.update({ components: [] });
-
-        const item = await compendioDB.get(itemId);
-        if (!item) {
-            return interaction.followUp({ content: 'Error: El item de este cofre no se encontró en el compendio.', ephemeral: true });
-        }
-        
-        // 1. Obtener personajes del usuario
-        const userPersonajes = [];
-        const characterKeyPrefix = `${interaction.user.id}:`;
-        for await (const [key, value] of personajesDB.iterator()) {
-            if (key.startsWith(characterKeyPrefix)) {
-                userPersonajes.push({ key, ...value });
-            }
+    if (success) {
+        // En un flujo normal de cofre, el mensaje de selección original debe eliminarse
+        if (interaction.message && interaction.message.delete) {
+            await interaction.message.delete().catch(console.error);
         }
 
-        if (userPersonajes.length === 0) {
-            return interaction.followUp({ content: 'No tienes ningún personaje (tupper) registrado para recibir este objeto. Usa `!Zcrearpersonaje "Nombre"`', ephemeral: true });
-        }
+        const characterName = characterId.replace(/_/g, ' ');
 
-        // Si solo tiene uno, lo asignamos directamente
-        if (userPersonajes.length === 1) {
-            const personaje = userPersonajes[0];
-            const success = await agregarItemAInventario(personaje.key, item);
-            
-            if (success) {
-                const rewardEmbed = new EmbedBuilder()
-                    .setColor(REWARD_EMBED_COLOR)
-                    .setTitle(`✅ ¡Obtuviste un Tesoro!`)
-                    .setDescription(`${interaction.user} ha abierto el **${CHEST_TYPES[tipoCofre].nombre}** y ha encontrado un(a) **${item.nombre}**!`)
-                    .addFields(
-                        { name: 'Descripción', value: item.descripcion, inline: false },
-                        { name: 'Asignado a', value: personaje.nombre, inline: true }
-                    )
-                    .setThumbnail(item.imagen);
+        const isMoneda = item.tipo === 'moneda';
+        const articulo = isMoneda ? 'una' : 'un';
 
-                // Enviar el mensaje de recompensa al canal
-                return interaction.channel.send({ embeds: [rewardEmbed] });
-            } else {
-                 // Esto no debería pasar si se ha comprobado antes, pero es una seguridad
-                return interaction.followUp({ content: 'Error interno al asignar el item al inventario.', ephemeral: true });
-            }
+        const rewardEmbed = new EmbedBuilder()
+            .setColor(REWARD_EMBED_COLOR)
+            // Título: ¡Has encontrado un/una [Nombre del Objeto]!
+            .setTitle(`✨ ¡Has encontrado ${articulo} ${item.nombre}! ✨`)
+            .setThumbnail(item.imagen)
+            // DESARROLLO: Usa el GIF principal de tesoro.
+            .setImage(LINK_TREASURE_GIF)
+            // Descripción: Descripción del objeto ANTES de la confirmación
+            .setDescription(`*${item.descripcion}*`);
 
+        // Añadir campo de confirmación
+        if (isMoneda) {
+            // Moneda (Suma el valor)
+            rewardEmbed.addFields({
+                name: 'Asignación de Rupias',
+                value: `Se han añadido **${item.valorRupia}** rupias a la cuenta de **${characterName}**.`,
+                inline: false
+            });
         } else {
-            // Si tiene múltiples, se debería usar un SelectMenu.
-            // Para simplificar, se indica que necesita transferirlo manualmente.
-             return interaction.followUp({ 
-                content: `Tienes múltiples personajes. El item **${item.nombre}** ha sido guardado en tu ***bóveda personal***.\n\n***Instrucciones:*** *Crea un nuevo comando para transferir items a personajes.*`,
-                ephemeral: true 
+            // Objeto Normal (Añade a lista)
+            rewardEmbed.addFields({
+                name: 'Asignación de Objeto',
+                value: `**${item.nombre}** ha sido añadido al inventario de **${characterName}** (Tupper de ${interaction.user.username}).`,
+                inline: false
             });
         }
+
+        return interaction.followUp({ embeds: [rewardEmbed], ephemeral: false });
+    } else {
+        return interaction.followUp({ content: `Error: No se encontró el inventario para el personaje **${characterName}** vinculado a tu cuenta.`, ephemeral: true });
+    }
+}
+
+// =========================================================================
+// === EVENTOS DEL BOT (Manejo de Interacciones/Mensajes) ===
+// =========================================================================
+
+client.on('ready', () => {
+    console.log(`¡Zelda BOT iniciado como ${client.user.tag}!`);
+    client.user.setActivity('Gestionando el Compendio (DB Externa)');
+});
+
+client.on('interactionCreate', async interaction => {
+    // 1. Lógica de Paginación (Objetos y Enemigos unificados)
+    if (interaction.isButton() && ['first', 'prev', 'next', 'last'].includes(interaction.customId)) {
+
+        const footerText = interaction.message.embeds[0].footer.text;
+        const embedTitle = interaction.message.embeds[0].title;
+        const match = footerText.match(/Página (\d+) de (\d+)/);
+
+        if (!match) return;
+        const currentPage = parseInt(match[1]) - 1;
+
+        let dataArray = [];
+        let createEmbedFunc;
+        let ITEMS_PER_PAGE = 5;
+
+        if (embedTitle.includes('Objetos')) {
+            dataArray = await obtenerTodosItems();
+            createEmbedFunc = createItemEmbedPage;
+            if (dataArray.length === 0) return interaction.update({ content: 'El compendio de objetos está vacío.' });
+        } else if (embedTitle.includes('Monstruos')) {
+            dataArray = await obtenerTodosEnemigos();
+            createEmbedFunc = createEnemyEmbedPage;
+            if (dataArray.length === 0) return interaction.update({ content: 'El compendio de monstruos está vacío.' });
+        } else {
+            return;
+        }
+
+        const totalPages = Math.ceil(dataArray.length / ITEMS_PER_PAGE);
+        let newPage = currentPage;
+
+        switch (interaction.customId) {
+            case 'first': newPage = 0; break;
+            case 'prev': newPage = Math.max(0, currentPage - 1); break;
+            case 'next': newPage = Math.min(totalPages - 1, currentPage + 1); break;
+            case 'last': newPage = totalPages - 1; break;
+        }
+
+        const { embed: newEmbed } = createEmbedFunc(dataArray, newPage);
+        const newRow = createPaginationRow(newPage, totalPages);
+        await interaction.update({ embeds: [newEmbed], components: [newRow] });
+        return;
+    }
+
+    // 2. Lógica de Apertura de Cofre - MODIFICADO MENSAJE DE SELECCIÓN
+    if (interaction.isButton() && interaction.customId.startsWith('open_chest_')) {
+        const fullId = interaction.customId.replace('open_chest_', '');
+        const [itemId, chestType] = fullId.split('-'); // Ahora el ID es itemID-tipoCofre
+
+        // El cofre fue creado con el ID del item, vamos a buscar el objeto original
+        const item = await compendioDB.get(itemId);
+        const cofreInfo = CHEST_TYPES[chestType || 'pequeño']; // Usamos el tipo para el mensaje
+
+        if (interaction.message.components.length === 0 || interaction.message.components[0].components[0].disabled) {
+            return interaction.reply({ content: 'Este cofre ya ha sido abierto.', ephemeral: true });
+        }
+
+        if (!item) {
+            return interaction.reply({ content: 'El tesoro no se encontró en el compendio. Notifica al Staff.', ephemeral: true });
+        }
+
+        const characterKeyPrefix = `${interaction.user.id}:`;
+        const allCharacterKeys = [];
+
+        for await (const [key] of personajesDB.iterator()) {
+            if (key.startsWith(characterKeyPrefix)) {
+                // Obtener solo el nombre limpio del personaje desde la clave
+                allCharacterKeys.push(key.split(':')[1].replace(/_/g, ' '));
+            }
+        }
+
+        if (allCharacterKeys.length === 0) {
+            return interaction.reply({ content: 'No tienes personajes (tuppers) registrados para recibir este objeto. Usa `!Zcrearpersonaje "Nombre"` primero.', ephemeral: true });
+        }
+
+        const disabledRow = new ActionRowBuilder().addComponents(
+            ButtonBuilder.from(interaction.message.components[0].components[0]).setDisabled(true)
+        );
+        await interaction.update({ components: [disabledRow] });
+
+        const options = allCharacterKeys.map(name => ({
+            label: name,
+            value: name.toLowerCase().replace(/ /g, '_')
+        }));
+
+        // El customId ahora lleva el itemID y el TIPO de cofre
+        const selectRow = new ActionRowBuilder().addComponents(
+            new StringSelectMenuBuilder()
+                .setCustomId(`assign_item_${itemId}_${chestType}`) // Guardamos el tipo de cofre
+                .setPlaceholder(`Selecciona el personaje...`)
+                .addOptions(options)
+        );
+
+        // Mensaje de cofre encontrado (sin el nombre del objeto)
+        await interaction.channel.send({
+            content: `${interaction.user}, ¡Has encontrado un **${cofreInfo.nombre}**! ¿A qué personaje (Tupper) quieres asignarle el tesoro?`,
+            components: [selectRow]
+        });
+
+        return;
+    }
+
+    // 3. Lógica de Botones de Encuentro (sin cambios)
+    if (interaction.isButton() && interaction.customId.startsWith('enemy_')) {
+        const action = interaction.customId.split('_')[1];
+
+        if (action === 'accept') {
+            await interaction.reply({ content: `**${interaction.user.username}** acepta el combate contra ${interaction.message.embeds[0].title.replace('⚔️ ¡ALERTA! ', '')}. ¡Que comience la batalla!`, ephemeral: false });
+
+            const editedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
+                .setFooter(null)
+                .setDescription(interaction.message.embeds[0].description + `\n\n_El combate ha sido aceptado por ${interaction.user.username}._`);
+
+            await interaction.message.edit({
+                embeds: [editedEmbed],
+                components: []
+            });
+
+
+        } else if (action === 'deny') {
+            const enemyName = interaction.message.embeds[0].title.replace('⚔️ ¡ALERTA! Enemigo(s) a la vista: ', '').replace(/!$/, '');
+
+            await interaction.message.delete();
+
+            await interaction.channel.send(`✨ **${interaction.user.username}** ha decidido evitar el encuentro. ¡Los ${enemyName} se han marchado!`);
+        }
+        return;
+    }
+
+    // 4. Lógica de Asignación por Select (cuando se pulsa el dropdown) - USANDO FUNCIÓN CENTRALIZADA
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('assign_item_')) {
+        // Deferir para evitar "Interacción Fallida"
+        await interaction.deferUpdate({ ephemeral: false });
+
+        const parts = interaction.customId.split('_');
+        // parts[2] contiene "itemId-tipoCofre" o simplemente "itemId"
+        const fullItemIdAndChest = parts[2];
+
+        // Extraer solo la parte del ID antes del primer guion (clave limpia)
+        let itemId = fullItemIdAndChest.split('-')[0];
+
+        // **CORRECCIÓN AGRESIVA DEL ITEM ID (Confirmamos la limpieza)**:
+        // Limpia el ID de cualquier carácter que no sea letra, número o guion bajo
+        itemId = itemId.toLowerCase().replace(/[^a-z0-9_]/g, '');
+
+        // El characterId ya viene limpio del select
+        const characterId = interaction.values[0];
+
+        // Bloquear si no es el usuario original (usando la mención original)
+        if (interaction.message.content.includes(interaction.user.id) === false) {
+            return interaction.followUp({ content: 'Esta asignación es solo para el usuario que abrió el cofre.', ephemeral: true });
+        }
+
+        // Llamar a la función centralizada para manejar la asignación y el mensaje.
+        return manejarAsignacionCofre(interaction.user.id, itemId, characterId, interaction);
+    }
+
+    // 5. Lógica de Confirmación de Borrado de Personajes
+    if (interaction.isButton() && interaction.customId.startsWith('confirm_delete_all_')) {
+        const userId = interaction.customId.replace('confirm_delete_all_', '');
+
+        if (interaction.user.id !== userId) {
+            return interaction.reply({ content: 'Solo el usuario que inició el proceso puede confirmar esto.', ephemeral: true });
+        }
+
+        await interaction.deferUpdate();
+
+        // 1. Eliminar todos los personajes
+        const deletedCount = await deleteAllPersonajes(userId);
+
+        // 2. Editar el mensaje original con la confirmación
+        const confirmationEmbed = new EmbedBuilder()
+            .setColor('#E82A2A')
+            .setTitle(`🗑️ Eliminación Masiva Confirmada`)
+            .setDescription(`Se han **eliminado permanentemente** **${deletedCount}** personajes (inventarios) vinculados a tu cuenta.`);
+
+        // El mensaje original de confirmación se reemplaza
+        await interaction.message.edit({
+            content: `El proceso de borrado de inventarios ha finalizado.`,
+            embeds: [confirmationEmbed],
+            components: []
+        });
+
+        // Respuesta efímera para el usuario
+        return interaction.followUp({ content: `✅ ¡Todos tus personajes han sido eliminados!`, ephemeral: true });
     }
 });
 
-// --- MANEJADOR DE MENSAJES (COMANDOS) ---
 client.on('messageCreate', async message => {
     if (message.author.bot) return;
+
+    // Nota: hasAdminPerms utiliza 'message.member.roles.cache.has' y 'message.member.permissions.has'.
+    // Esta verificación solo funciona en servidores.
+    const hasAdminPerms = message.member && (message.member.roles.cache.has(ADMIN_ROLE_ID) || message.member.permissions.has(PermissionsBitField.Flags.Administrator));
+
     if (!message.content.startsWith(PREFIX)) return;
 
     const fullCommand = message.content.slice(PREFIX.length).trim();
-    const command = fullCommand.split(/\s+/)[0].toLowerCase();
-    const args = fullCommand.slice(command.length).trim().split(/\s+/);
+    const args = fullCommand.split(/ +/);
+    const command = args.shift().toLowerCase();
 
-    // Comprobar si es Staff (Asumimos que el Staff tiene el rol ADMIN_ROLE_ID)
-    const hasAdminPerms = message.member && message.member.roles.cache.has(ADMIN_ROLE_ID);
+
+    // --- COMANDO: HELP ---
+    if (command === '-help') {
+        const helpEmbed = new EmbedBuilder()
+            .setColor('#0099ff')
+            .setTitle('📖 Guía de Comandos del Zelda BOT')
+            .setDescription('Aquí puedes consultar todos los comandos disponibles, diferenciando por el nivel de acceso.')
+            .addFields(
+                {
+                    name: '🛠️ Comandos de Administración (Solo Staff)',
+                    value: [
+                        `\`!Zcrearitem "Nombre" "Desc" "Tipo" "URL" ["ValorRupia"]\`: Registra un nuevo objeto.`,
+                        `\`!Zeliminaritem "Nombre"\`: Borra un objeto.`,
+                        `\`!Zdaritem @Usuario "Personaje" "ItemNombre"\`: Asigna un item del compendio al inventario de un personaje.`,
+                        `\`!Zeliminarrupias @Usuario "Personaje" <cantidad|all>\`: Elimina rupias del inventario.`,
+                        `\n**— Gestión de Encuentros —**`,
+                        `\`!Zcrearenemigo "Nombre" "HP" "URL" ["Mensaje"] [pluralizar_nombre]\`: Registra un enemigo base.`,
+                        `\`!Zeliminarenemigo "Nombre"\`: Borra un enemigo base.`,
+                        `\`!Zspawn <CanalID> "EnemigoNombre" [Cantidad] [sinbotones]\`: Hace aparecer enemigos.`,
+                        `\`!Zcrearcofre <CanalID> "Tipo" "ItemNombre"\`: Crea un cofre.`,
+                    ].join('\n'),
+                    inline: false
+                },
+                {
+                    name: '🌎 Comandos de Consulta (Público)',
+                    value: [
+                        `\`!Zcrearpersonaje "Nombre del Tupper"\`: Crea un inventario vinculado a un Tupper.`,
+                        `\`!Zpersonajes\`: Muestra la lista de personajes que has creado.`,
+                        `\`!Zinventario "Nombre del Tupper"\`: Muestra los objetos y rupias de tu personaje.`,
+                        `\`!Zeliminariteminv "Personaje" "Item"\`: Elimina un objeto de tu inventario.`,
+                        `\`!Zlistaritems\`: Muestra el compendio de objetos (ordenado por fecha de creación).`,
+                        `\`!Zlistarenemigos\`: Muestra el compendio de monstruos (con paginación).`,
+                        `\`!Zverenemigo "Nombre"\`: Muestra la ficha detallada de un enemigo.`,
+                        `\`!Zveritem "Nombre"\`: Muestra la ficha detallada de un objeto.`,
+                        `\`!Zmostraritemid "Nombre"\`: Muestra la ID (clave interna) de un objeto del compendio.`,
+                        `\`!Z-help\`: Muestra esta guía de comandos.`
+                    ].join('\n'),
+                    inline: false
+                }
+            )
+            .setFooter({ text: 'Desarrollado para el Rol de Nuevo Hyrule | Prefijo: !Z' });
+
+        // Comandos Públicos
+        helpEmbed.addFields({
+            name: '👤 Comandos Públicos (Personajes e Interacción)',
+            value:
+                '`!Zcrearpersonaje <Nombre>`: Registra un nuevo personaje (Inicia con **100 Rupias**).\n' + // EDITADO
+                '`!Zeliminarpersonaje <Nombre>`: Elimina uno de tus personajes y su inventario.\n' +
+                '`!Zborrarpersonajes`: **¡PELIGRO!** Elimina *todos* tus personajes y sus inventarios.\n' + // NUEVO COMANDO
+                '`!Zinventario <Nombre>`: Muestra las rupias y objetos de tu personaje.\n' +
+                '`!Zpersonajes`: Lista todos tus personajes (ordenados por creación).\n' +
+                '`!Zdaritem <Personaje> <Item> @Destino`: Transfiere un objeto de tu inventario.\n' +
+                '`!Zdarrupia_p <Personaje> @Destino <Cantidad>`: Transfiere Rupias a otro personaje.',
+            inline: false
+        });
+
+        // Comandos de Staff
+        helpEmbed.addFields({
+            name: '🛠️ Comandos de Staff (Administración de DB)',
+            value:
+                '**Items y Compendio:**\n' +
+                '`!Zcrearitem "<Nombre>" "<Desc>" "<Tipo>" "<Imagen>" [ValorRupia]`\n' +
+                '`!Zeditaritem "<Nombre>" <campo> <nuevo_valor>`\n' +
+                '\n**Inventarios y Rupias:**\n' +
+                '`!Zdaritem <Personaje> <Item> @Destino`: Asigna un objeto *del compendio*.\n' +
+                '`!Zdarrupia @Usuario "Personaje" <Cantidad>`: Añade Rupias al personaje. **(Staff)**\n' +
+                '`!Zeliminarrupias @Usuario "Personaje" <cantidad|all>`: Quita Rupias. **(Staff)**\n' +
+                '`!Zreiniciarinv <Personaje>`: Borra todo el inventario y rupias.\n' +
+                '\n**Cofres (Roleplay):**\n' +
+                '`!Zcrearcofre #canal <tipo> "<Item>"`: Crea un cofre con un objeto específico.',
+            inline: false
+        });
+
+        helpEmbed.setFooter({ text: 'Los comandos Staff requieren el rol de Staff o permisos de Administrador.' });
+
+        // Se usa message.channel.send ya que se asume que el comando es en un canal público.
+        return message.channel.send({ embeds: [helpEmbed] });
+    }
 
     // --- COMANDO: CREAR ITEM (Staff) ---
     if (command === 'crearitem') {
         if (!hasAdminPerms) {
-            return message.reply('¡Solo los Administradores Canon pueden registrar items!');
+            return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden registrar objetos mágicos.');
         }
 
         const regex = /"([^"]+)"/g;
         const matches = [...message.content.matchAll(regex)];
+        const numExpected = 4;
 
-        if (matches.length < 3) {
-            return message.reply('Sintaxis incorrecta. Uso: `!Zcrearitem "Nombre" "Descripción" "URL de Imagen"`');
+        if (matches.length < numExpected) {
+            return message.reply('Sintaxis incorrecta. Uso: `!Zcrearitem "Nombre" "Descripción" "Tipo (moneda/objeto/keyitem)" "URL de Imagen" ["ValorRupia (solo para monedas)"]`');
         }
 
         const nombre = matches[0][1];
         const descripcion = matches[1][1];
-        const imagenUrl = matches[2][1];
+        const tipo = matches[2][1].toLowerCase();
+        const imagenUrl = matches[3][1];
+
+        let valorRupia = 0;
+
+        if (!TIPOS_VALIDOS.includes(tipo)) {
+            return message.reply(`El tipo de objeto debe ser uno de estos: ${TIPOS_VALIDOS.join(', ')}.`);
+        }
+
+        if (tipo === 'moneda') {
+            if (matches.length < 5) {
+                return message.reply('Para items tipo **moneda**, debes especificar el valor en Rupias: `!Zcrearitem "Nombre" "Desc" "moneda" "URL" "ValorRupia"`');
+            }
+            valorRupia = parseInt(matches[4][1]);
+            if (isNaN(valorRupia) || valorRupia <= 0) {
+                return message.reply('El ValorRupia para las monedas debe ser un número entero positivo.');
+            }
+        }
 
         const id = generarKeyLimpia(nombre);
 
-        try {
-            const existingItem = await compendioDB.get(id);
-            if (existingItem) {
-                return message.reply(`¡El item **${nombre}** ya está registrado!`);
-            }
-        } catch (error) {
-            // No existe, continuar
+        const existingItem = await compendioDB.get(id);
+        if (existingItem) {
+            return message.reply(`¡El objeto **${nombre}** ya está registrado!`);
         }
 
+        const now = new Date();
         const newItem = {
             nombre: nombre,
             descripcion: descripcion,
+            tipo: tipo,
+            valorRupia: valorRupia,
+            disponible: true,
             imagen: imagenUrl,
-            registradoPor: message.author.tag
+            registradoPor: message.author.tag,
+            fecha: now.toLocaleDateString('es-ES'),
+            fechaCreacionMs: now.getTime()
         };
 
         await compendioDB.set(id, newItem);
 
         const embed = new EmbedBuilder()
-            .setColor(REWARD_EMBED_COLOR)
-            .setTitle(`✅ Item Registrado: ${nombre}`)
-            .setDescription(descripcion)
-            .setImage(imagenUrl);
+            .setColor(LIST_EMBED_COLOR)
+            .setTitle(`✅ Objeto Registrado: ${nombre}`)
+            .setDescription(`Un nuevo artefacto ha sido añadido al Compendio de Hyrule.`)
+            .addFields(
+                { name: 'Descripción', value: descripcion, inline: false },
+                { name: 'Tipo', value: tipo.toUpperCase(), inline: true },
+                { name: 'Valor (Rupias)', value: tipo === 'moneda' ? valorRupia.toString() : 'N/A', inline: true },
+                { name: 'Estado', value: 'Disponible', inline: true }
+            )
+            .setImage(imagenUrl)
+            .setFooter({ text: `Registrado por: ${message.author.tag}` });
+
+        message.channel.send({ embeds: [embed] });
+    }
+
+    // --- COMANDO: ELIMINAR ITEM (Staff) ---
+    if (command === 'eliminaritem') {
+        if (!hasAdminPerms) {
+            return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden eliminar objetos.');
+        }
+
+        const regex = /"([^"]+)"/;
+        const match = fullCommand.match(regex);
+
+        if (!match) {
+            return message.reply('Uso: `!Zeliminaritem "Nombre Completo del Objeto"`');
+        }
+
+        const nombreItem = match[1];
+        const id = nombreItem.toLowerCase().replace(/ /g, '_');
+
+        const itemEliminado = await compendioDB.get(id);
+        if (!itemEliminado) {
+            return message.reply(`No se encontró ningún objeto llamado **${nombreItem}** en el Compendio.`);
+        }
+
+        await compendioDB.delete(id);
+
+        const embed = new EmbedBuilder()
+            .setColor('#cc0000')
+            .setTitle(`🗑️ Objeto Eliminado: ${itemEliminado.nombre}`)
+            .setDescription(`El objeto **${itemEliminado.nombre}** ha sido borrado permanentemente del Compendio de Nuevo Hyrule.`);
 
         message.channel.send({ embeds: [embed] });
     }
@@ -365,72 +795,72 @@ client.on('messageCreate', async message => {
         const match = fullCommand.match(regex);
 
         if (!match) {
-            return message.reply('Uso: `!Zveritem "Nombre Completo del Item"`');
+            return message.reply('Uso: `!Zveritem "Nombre Completo del Objeto"`');
         }
 
         const nombreItem = match[1];
-        const id = generarKeyLimpia(nombreItem);
-        
-        try {
-            const item = await compendioDB.get(id);
-            const embed = new EmbedBuilder()
-                .setColor(LIST_EMBED_COLOR)
-                .setTitle(`🔎 Ficha de Item: ${item.nombre}`)
-                .setDescription(item.descripcion)
-                .setImage(item.imagen)
-                .setFooter({ text: `Registrado por: ${item.registradoPor || 'Desconocido'}` });
+        const id = nombreItem.toLowerCase().replace(/ /g, '_');
+        const item = await compendioDB.get(id);
 
-            message.channel.send({ embeds: [embed] });
-        } catch (error) {
-            if (error.code === 'NotFoundError') {
-                return message.reply(`No se encontró ningún item llamado **${nombreItem}** en el Compendio.`);
-            }
-            console.error(error);
-            return message.reply('Ocurrió un error al buscar el item.');
+        if (!item) {
+            return message.reply(`No se encontró ningún objeto llamado **${nombreItem}** en el Compendio.`);
         }
+
+        const embed = new EmbedBuilder()
+            .setColor(LIST_EMBED_COLOR)
+            .setTitle(item.nombre)
+            .addFields(
+                { name: 'Descripción', value: item.descripcion, inline: false },
+                { name: 'Tipo', value: item.tipo.toUpperCase(), inline: true },
+                { name: 'Estado', value: item.disponible ? 'Disponible' : 'En Posesión', inline: true },
+                { name: 'Fecha de Registro', value: item.fecha, inline: true }
+            )
+            .setImage(item.imagen)
+            .setFooter({ text: `Registrado por: ${item.registradoPor}` });
+
+        message.channel.send({ embeds: [embed] });
     }
 
-    // --- COMANDO: ELIMINAR ITEM (Staff) ---
-    if (command === 'eliminaritem') {
-        if (!hasAdminPerms) {
-            return message.reply('¡Solo los Administradores Canon pueden eliminar items!');
-        }
-
+    // --- NUEVO COMANDO: MOSTRAR ID INTERNA DEL ITEM (Público) ---
+    if (command === 'mostraritemid') {
         const regex = /"([^"]+)"/;
         const match = fullCommand.match(regex);
 
         if (!match) {
-            return message.reply('Uso: `!Zeliminaritem "Nombre Completo del Item"`');
+            return message.reply('Uso: `!Zmostraritemid "Nombre Completo del Objeto"`');
         }
 
         const nombreItem = match[1];
+        // 1. Generar el ID interno (clave limpia)
         const id = generarKeyLimpia(nombreItem);
 
-        try {
-            const itemEliminado = await compendioDB.get(id);
-            await compendioDB.delete(id);
+        // 2. Intentar recuperar el item para confirmar que existe
+        const item = await compendioDB.get(id);
 
-            const embed = new EmbedBuilder()
-                .setColor('#cc0000')
-                .setTitle(`🗑️ Item Eliminado: ${itemEliminado.nombre}`)
-                .setDescription(`El item **${itemEliminado.nombre}** ha sido borrado permanentemente del compendio.`);
-
-            message.channel.send({ embeds: [embed] });
-        } catch (error) {
-            if (error.code === 'NotFoundError') {
-                return message.reply(`No se encontró ningún item llamado **${nombreItem}** en la base de datos.`);
-            }
-            console.error(error);
-            return message.reply('Ocurrió un error al eliminar el item.');
+        if (!item) {
+            return message.reply(`El objeto **${nombreItem}** no se encontró en el Compendio. Asegúrate de que el nombre esté escrito correctamente.`);
         }
+
+        const embed = new EmbedBuilder()
+            .setColor(LIST_EMBED_COLOR)
+            .setTitle(`🔍 Identificador Interno (ID) de Item`)
+            .setDescription(`Esta es la clave única utilizada por el bot para identificar **${item.nombre}** en la base de datos y en los comandos de cofres/asignación.`)
+            .addFields(
+                { name: 'Nombre Registrado', value: item.nombre, inline: true },
+                { name: 'Tipo', value: item.tipo.toUpperCase(), inline: true },
+                { name: 'ID Interna (Clave)', value: `\`${id}\``, inline: false }
+            )
+            .setFooter({ text: 'Útil para comandos Staff como !Zcrearcofre' });
+
+        message.channel.send({ embeds: [embed] });
     }
-    
+
     // --- COMANDO: LISTAR ITEMS (Público) ---
     if (command === 'listaritems') {
         const items = await obtenerTodosItems();
 
         if (items.length === 0) {
-            return message.channel.send('***El Compendio de Items está vacío. ¡Que se registre la primera cosa!***');
+            return message.channel.send('***El Compendio de Objetos está vacío. ¡Que se registre el primer tesoro!***');
         }
 
         const currentPage = 0;
@@ -440,95 +870,184 @@ client.on('messageCreate', async message => {
         message.channel.send({ embeds: [embed], components: [row] });
     }
 
-
-    // --- COMANDO: CREAR PERSONAJE (Público) ---
+    // --- COMANDO: CREAR PERSONAJE/TUPPER (Público) ---
     if (command === 'crearpersonaje') {
         const regex = /"([^"]+)"/;
         const match = fullCommand.match(regex);
 
         if (!match) {
-            return message.reply('Uso: `!Zcrearpersonaje "Nombre del Personaje"`');
-        }
-
-        const nombrePersonaje = match[1].trim();
-
-        if (nombrePersonaje.length < 3 || nombrePersonaje.length > 30) {
-            return message.reply('El nombre del personaje debe tener entre 3 y 30 caracteres.');
-        }
-
-        const personajeKey = generarPersonajeKey(message.author.id, nombrePersonaje);
-
-        try {
-            const existing = await personajesDB.get(personajeKey);
-            if (existing) {
-                return message.reply(`Ya tienes un personaje llamado **${nombrePersonaje}** registrado. ¡Sé original!`);
-            }
-        } catch (error) {
-            // OK, si es NotFoundError, procedemos
-        }
-
-        const newPersonaje = {
-            nombre: nombrePersonaje,
-            propietario: message.author.id,
-            tagPropietario: message.author.tag,
-            rupias: 0,
-            objetos: [],
-            createdAt: Date.now() // Timestamp de creación
-        };
-
-        await personajesDB.set(personajeKey, newPersonaje);
-
-        const embed = new EmbedBuilder()
-            .setColor(LIST_EMBED_COLOR)
-            .setTitle(`✨ Personaje Creado: ${nombrePersonaje} ✨`)
-            .setDescription(`¡Felicidades! **${nombrePersonaje}** ha sido registrado con éxito.`)
-            .addFields(
-                { name: 'Dueño', value: message.author.tag, inline: true },
-                { name: 'Inventario Inicial', value: 'Vacío', inline: true },
-                { name: 'Rupias Iniciales', value: '0', inline: true }
-            );
-
-        message.channel.send({ embeds: [embed] });
-    }
-
-    // --- COMANDO: VER INVENTARIO DE PERSONAJE (Público) ---
-    if (command === 'inventario') {
-        const regex = /"([^"]+)"/;
-        const match = fullCommand.match(regex);
-
-        if (!match) {
-            return message.reply('Uso: `!Zinventario "Nombre del Personaje"`');
+            return message.reply('Uso: `!Zcrearpersonaje "Nombre del Tupper"` (Debe ser el nombre exacto de tu tupper).');
         }
 
         const nombrePersonaje = match[1];
         const personajeKey = generarPersonajeKey(message.author.id, nombrePersonaje);
-        
-        try {
-            const personaje = await personajesDB.get(personajeKey);
 
-            const rupias = personaje.rupias || 0;
-            const objetos = personaje.objetos || [];
+        const existingPersonaje = await personajesDB.get(personajeKey);
 
-            const inventoryList = objetos.map((item, index) => 
-                `**${index + 1}. ${item.nombre}** - *${item.descripcion.slice(0, 50)}${item.descripcion.length > 50 ? '...' : ''}*`
-            ).join('\n') || '*(Inventario vacío)*';
+        if (existingPersonaje) {
+            return message.reply(`¡Ya tienes un inventario registrado para el personaje **${nombrePersonaje}**!`);
+        }
 
-            const embed = new EmbedBuilder()
-                .setColor(TREASURE_EMBED_COLOR)
-                .setTitle(`🎒 Inventario de ${personaje.nombre}`)
-                .setDescription(`**💰 Rupias:** ${rupias}\n\n**📦 Objetos (${objetos.length}):**\n${inventoryList}`)
-                .setFooter({ text: `Propietario: ${personaje.tagPropietario}` });
+        const personajeData = {
+            nombre: nombrePersonaje,
+            propietarioId: message.author.id, // Añadido para consistencia con migrarRupias
+            propietarioTag: message.author.tag,
+            rupias: 100, // <--- CAMBIO SOLICITADO: Inicia con 100 Rupias
+            objetos: [],
+            fechaRegistro: new Date().toLocaleDateString('es-ES'),
+            createdAt: Date.now() // <--- ¡Añadido! Timestamp para ordenación
+        };
 
-            message.channel.send({ embeds: [embed] });
-        } catch (error) {
-            if (error.code === 'NotFoundError') {
-                return message.reply(`No se encontró el personaje **${nombrePersonaje}** vinculado a tu cuenta. Usa \`!Zpersonajes\` para ver tus Tuppers.`);
+        await personajesDB.set(personajeKey, personajeData); // Usando personajesDB
+
+        const embed = new EmbedBuilder()
+            .setColor(LIST_EMBED_COLOR)
+            .setTitle(`👤 Personaje Registrado: ${nombrePersonaje}`)
+            .setDescription(`Se ha creado un inventario y ha sido vinculado a tu ID de Discord.`)
+            .addFields(
+                { name: 'Propietario', value: message.author.tag, inline: true },
+                { name: 'Inventario Inicial', value: `100 Rupias y 0 Objetos`, inline: true } // MENSAJE AJUSTADO
+            )
+            .setFooter({ text: 'Ahora puedes recibir objetos en este personaje.' });
+
+        message.channel.send({ embeds: [embed] });
+    }
+
+    // --- NUEVO COMANDO: ELIMINAR PERSONAJE (Público) ---
+    if (command === 'eliminarpersonaje') {
+        // Se deja sin verificación de Staff para que cada usuario pueda eliminar sus tuppers.
+
+        const regex = /"([^"]+)"/;
+        const match = fullCommand.match(regex);
+
+        if (!match) {
+            return message.reply('Uso: `!Zeliminarpersonaje "Nombre del Tupper"` (Debe ser el nombre exacto de tu personaje).');
+        }
+
+        const nombrePersonaje = match[1];
+        const personajeKey = generarPersonajeKey(message.author.id, nombrePersonaje);
+
+        const exists = await personajesDB.get(personajeKey);
+
+        if (!exists) {
+            return message.reply(`Error: No se encontró ningún personaje llamado **${nombrePersonaje}** vinculado a tu cuenta.`);
+        }
+
+        // ELIMINAR la entrada de la base de datos
+        await personajesDB.delete(personajeKey);
+
+        const embed = new EmbedBuilder()
+            .setColor('#E82A2A')
+            .setTitle(`🗑️ Personaje Eliminado`)
+            .setDescription(`El personaje **${nombrePersonaje}** ha sido **ELIMINADO** permanentemente de tu inventario. Se han borrado sus objetos y rupias.`);
+
+        return message.channel.send({ embeds: [embed] });
+    }
+
+    // --- NUEVO COMANDO: BORRAR TODOS LOS PERSONAJES (Público, con confirmación) ---
+    if (command === 'borrarpersonajes') {
+        const userId = message.author.id;
+        const characterKeyPrefix = `${userId}:`;
+        const allCharacters = [];
+
+        // 1. Recoger todos los personajes del usuario
+        for await (const [key, value] of personajesDB.iterator()) {
+            if (key.startsWith(characterKeyPrefix)) {
+                allCharacters.push(value.nombre);
             }
-            console.error(error);
-            return message.reply('Ocurrió un error al buscar el inventario.');
+        }
+
+        if (allCharacters.length === 0) {
+            return message.reply('No tienes ningún personaje (tupper) registrado para borrar.');
+        }
+
+        // 2. Crear el mensaje de advertencia y botones
+        const confirmEmbed = new EmbedBuilder()
+            .setColor('#FF0000')
+            .setTitle('⚠️ ¡ADVERTENCIA: BORRADO MASIVO! ⚠️')
+            .setDescription(`Estás a punto de **ELIMINAR PERMANENTEMENTE** todos tus ${allCharacters.length} personajes:\n\n` +
+                `**${allCharacters.join(', ')}**\n\n` +
+                'Esta acción **no se puede deshacer** y perderás todos sus objetos y rupias.\n\n' +
+                '**Pulsa el botón de abajo para confirmar.**');
+
+        const confirmRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`confirm_delete_all_${userId}`)
+                .setLabel('CONFIRMAR ELIMINACIÓN TOTAL')
+                .setStyle(ButtonStyle.Danger),
+            new ButtonBuilder()
+                .setCustomId('cancel_delete_all')
+                .setLabel('Cancelar')
+                .setStyle(ButtonStyle.Secondary)
+        );
+
+        return message.reply({
+            content: `${message.author}, ¡Cuidado! Esta es una operación irreversible.`,
+            embeds: [confirmEmbed],
+            components: [confirmRow]
+        });
+    }
+
+    // --- COMANDO: VER INVENTARIO DEL PERSONAJE (Público) ---
+    if (command === 'inventario' || command === 'inv') {
+        const regex = /"([^"]+)"/;
+        const match = fullCommand.match(regex);
+
+        if (!match) {
+            return message.reply('Uso: `!Zinventario "Nombre del Tupper"` (Debes especificar el personaje a consultar).');
+        }
+
+        const nombrePersonaje = match[1];
+        const personajeKey = generarPersonajeKey(message.author.id, nombrePersonaje);
+
+        let personaje = await personajesDB.get(personajeKey);
+
+        if (!personaje) {
+            return message.reply(`No se encontró el personaje **${nombrePersonaje}** vinculado a tu cuenta. ¿Seguro que lo creaste con \`!Zcrearpersonaje\`?`);
+        }
+
+        // LÓGICA DE MIGRACIÓN DE RUPÍAS (asegura que está actualizada)
+        await migrarRupias(personaje);
+        personaje = await personajesDB.get(personajeKey);
+
+        const items = personaje.objetos || [];
+
+        // Obtener Avatar (Tupper o Usuario) 
+        const avatarUrl = await getTupperAvatar(client, nombrePersonaje, message.member);
+
+        // PAGINACIÓN Y MOSTRAR ITEMS
+        const ITEMS_PER_PAGE = 10;
+        const totalPages = Math.max(1, Math.ceil(items.length / ITEMS_PER_PAGE));
+        const currentPage = 0;
+
+        const start = currentPage * ITEMS_PER_PAGE;
+        const end = start + ITEMS_PER_PAGE;
+        const itemsToShow = items.slice(start, end);
+
+        let itemsList = itemsToShow.length > 0
+            ? itemsToShow.map(item => `• **${item.nombre}**`).join('\n')
+            : '¡Este personaje no tiene objetos!'; // Mensaje de inventario vacío
+
+        const embed = new EmbedBuilder()
+            .setColor(LIST_EMBED_COLOR)
+            .setTitle(`🎒 Inventario de ${personaje.nombre}`)
+            .setDescription(`**Propietario:** ${personaje.propietarioTag}\n**Rupias:** ${personaje.rupias}`)
+            .setThumbnail(avatarUrl)
+            .addFields({
+                name: 'Objetos en Posesión',
+                value: itemsList,
+                inline: false
+            })
+            .setFooter({ text: `Página ${currentPage + 1} de ${totalPages} | Total de objetos: ${items.length}` });
+
+        if (totalPages > 1) {
+            const row = createPaginationRow(currentPage, totalPages);
+            message.channel.send({ embeds: [embed], components: [row] });
+        } else {
+            message.channel.send({ embeds: [embed] });
         }
     }
-    
+
     // --- COMANDO: VER LISTA DE PERSONAJES DEL USUARIO (Público) ---
     if (command === 'personajes') {
         const characterKeyPrefix = `${message.author.id}:`;
@@ -546,6 +1065,7 @@ client.on('messageCreate', async message => {
         }
 
         // 2. ORDENAR por el timestamp de creación (más antiguo primero)
+        // Usamos (p.createdAt || 0) por si hay personajes creados antes del cambio.
         allCharacters.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 
         // 3. Generar la lista con el nuevo orden
@@ -576,33 +1096,28 @@ client.on('messageCreate', async message => {
         const nombreItem = matches[1][1];
 
         const personajeKey = generarPersonajeKey(message.author.id, nombrePersonaje);
-        
-        try {
-            const personaje = await personajesDB.get(personajeKey);
+        const personaje = await personajesDB.get(personajeKey);
 
-            const itemIndex = personaje.objetos.findIndex(item => item.nombre.toLowerCase() === nombreItem.toLowerCase());
-
-            if (itemIndex === -1) {
-                return message.reply(`El objeto **${nombreItem}** no se encontró en el inventario de **${nombrePersonaje}**.`);
-            }
-
-            const itemEliminado = personaje.objetos.splice(itemIndex, 1)[0];
-            await personajesDB.set(personajeKey, personaje);
-
-            const embed = new EmbedBuilder()
-                .setColor('#cc0000')
-                .setTitle(`🗑️ Objeto Eliminado del Inventario`)
-                .setDescription(`El objeto **${itemEliminado.nombre}** ha sido eliminado del inventario de **${nombrePersonaje}**.`)
-                .setFooter({ text: 'No se puede deshacer esta acción.' });
-
-            message.channel.send({ embeds: [embed] });
-        } catch (error) {
-            if (error.code === 'NotFoundError') {
-                return message.reply(`No se encontró el personaje **${nombrePersonaje}** vinculado a tu cuenta.`);
-            }
-            console.error(error);
-            return message.reply('Ocurrió un error al buscar el personaje.');
+        if (!personaje) {
+            return message.reply(`No se encontró el personaje **${nombrePersonaje}** vinculado a tu cuenta.`);
         }
+
+        const itemIndex = personaje.objetos.findIndex(item => item.nombre.toLowerCase() === nombreItem.toLowerCase());
+
+        if (itemIndex === -1) {
+            return message.reply(`El objeto **${nombreItem}** no se encontró en el inventario de **${nombrePersonaje}**.`);
+        }
+
+        const itemEliminado = personaje.objetos.splice(itemIndex, 1)[0];
+        await personajesDB.set(personajeKey, personaje);
+
+        const embed = new EmbedBuilder()
+            .setColor('#cc0000')
+            .setTitle(`🗑️ Objeto Eliminado del Inventario`)
+            .setDescription(`El objeto **${itemEliminado.nombre}** ha sido eliminado del inventario de **${nombrePersonaje}**.`)
+            .setFooter({ text: 'No se puede deshacer esta acción.' });
+
+        message.channel.send({ embeds: [embed] });
     }
 
     // --- NUEVO COMANDO: ELIMINAR RUPIAS DE PERSONAJE (Staff) ---
@@ -639,45 +1154,40 @@ client.on('messageCreate', async message => {
         }
 
         const personajeKey = generarPersonajeKey(targetUser.id, nombrePersonaje);
-        
-        try {
-            let personaje = await personajesDB.get(personajeKey);
+        let personaje = await personajesDB.get(personajeKey);
 
-            let oldRupias = personaje.rupias;
-            let rupiasRestadas = 0;
-
-            if (cantidad.toLowerCase() === 'all') {
-                rupiasRestadas = oldRupias;
-                personaje.rupias = 0;
-            } else {
-                const cantidadNum = parseInt(cantidad);
-                if (isNaN(cantidadNum) || cantidadNum <= 0) {
-                    return message.reply('La cantidad debe ser un número positivo o la palabra `all`.');
-                }
-                rupiasRestadas = Math.min(cantidadNum, oldRupias);
-                personaje.rupias = Math.max(0, oldRupias - cantidadNum);
-            }
-
-            await personajesDB.set(personajeKey, personaje);
-
-            const embed = new EmbedBuilder()
-                .setColor('#E82A2A')
-                .setTitle(`💸 Rupias Borradas`)
-                .setDescription(`Se han retirado **${rupiasRestadas}** rupias del inventario de **${personaje.nombre}**.`)
-                .addFields(
-                    { name: 'Propietario', value: targetUser.tag, inline: true },
-                    { name: 'Rupias Anteriores', value: oldRupias.toString(), inline: true },
-                    { name: 'Rupias Actuales', value: personaje.rupias.toString(), inline: true }
-                );
-
-            message.channel.send({ embeds: [embed] });
-        } catch (error) {
-            if (error.code === 'NotFoundError') {
-                return message.reply(`No se encontró el personaje **${nombrePersonaje}** vinculado a ${targetUser}.`);
-            }
-            console.error(error);
-            return message.reply('Ocurrió un error al buscar el personaje.');
+        if (!personaje) {
+            return message.reply(`No se encontró el personaje **${nombrePersonaje}** vinculado a ${targetUser}.`);
         }
+
+        let oldRupias = personaje.rupias;
+        let rupiasRestadas = 0;
+
+        if (cantidad.toLowerCase() === 'all') {
+            rupiasRestadas = oldRupias;
+            personaje.rupias = 0;
+        } else {
+            const cantidadNum = parseInt(cantidad);
+            if (isNaN(cantidadNum) || cantidadNum <= 0) {
+                return message.reply('La cantidad debe ser un número positivo o la palabra `all`.');
+            }
+            rupiasRestadas = Math.min(cantidadNum, oldRupias);
+            personaje.rupias = Math.max(0, oldRupias - cantidadNum);
+        }
+
+        await personajesDB.set(personajeKey, personaje);
+
+        const embed = new EmbedBuilder()
+            .setColor('#E82A2A')
+            .setTitle(`💸 Rupias Borradas`)
+            .setDescription(`Se han retirado **${rupiasRestadas}** rupias del inventario de **${personaje.nombre}**.`)
+            .addFields(
+                { name: 'Propietario', value: targetUser.tag, inline: true },
+                { name: 'Rupias Anteriores', value: oldRupias.toString(), inline: true },
+                { name: 'Rupias Actuales', value: personaje.rupias.toString(), inline: true }
+            );
+
+        message.channel.send({ embeds: [embed] });
     }
 
     // --- COMANDO: DAR ITEM A PERSONAJE (Staff) ---
@@ -698,35 +1208,31 @@ client.on('messageCreate', async message => {
         const nombreItem = matches[1][1];
 
         const itemId = generarKeyLimpia(nombreItem);
-        
-        try {
-            const item = await compendioDB.get(itemId);
+        const item = await compendioDB.get(itemId);
 
-            const personajeKey = generarPersonajeKey(targetUser.id, nombrePersonaje);
-            const success = await agregarItemAInventario(personajeKey, item);
-
-            if (!success) {
-                return message.reply(`No se encontró un inventario para el personaje **${nombrePersonaje}** vinculado a ${targetUser}. ¿Ha usado \`!Zcrearpersonaje\`?`);
-            }
-
-            const embed = new EmbedBuilder()
-                .setColor(REWARD_EMBED_COLOR)
-                .setTitle(`✨ Objeto Transferido a Inventario ✨`)
-                .setDescription(`**${item.nombre}** ha sido dado a **${nombrePersonaje}** (Tupper de ${targetUser.tag}).`)
-                .addFields(
-                    { name: 'Descripción del Objeto', value: item.descripcion, inline: false },
-                    { name: 'Inventario Actual', value: '*(Usa \`!Zinventario\` para verificarlo)*', inline: false }
-                )
-                .setThumbnail(item.imagen);
-
-            message.channel.send({ content: `${targetUser}`, embeds: [embed] });
-        } catch (error) {
-            if (error.code === 'NotFoundError') {
-                 return message.reply(`El objeto **${nombreItem}** no se encontró en el compendio.`);
-            }
-            console.error(error);
-            return message.reply('Ocurrió un error al procesar el item.');
+        if (!item) {
+            return message.reply(`El objeto **${nombreItem}** no se encontró en el compendio.`);
         }
+
+        const personajeKey = generarPersonajeKey(targetUser.id, nombrePersonaje);
+
+        const success = await agregarItemAInventario(personajeKey, item);
+
+        if (!success) {
+            return message.reply(`No se encontró un inventario para el personaje **${nombrePersonaje}** vinculado a ${targetUser}. ¿Ha usado \`!Zcrearpersonaje\`?`);
+        }
+
+        const embed = new EmbedBuilder()
+            .setColor(REWARD_EMBED_COLOR)
+            .setTitle(`✨ Objeto Transferido a Inventario ✨`)
+            .setDescription(`**${item.nombre}** ha sido dado a **${nombrePersonaje}** (Tupper de ${targetUser.tag}).`) // Mensaje sin Staff
+            .addFields(
+                { name: 'Descripción del Objeto', value: item.descripcion, inline: false },
+                { name: 'Inventario Actual', value: '*(Usa \`!Zinventario\` para verificarlo)*', inline: false }
+            )
+            .setThumbnail(item.imagen);
+
+        message.channel.send({ content: `${targetUser}`, embeds: [embed] });
     }
 
     // --- COMANDO: DAR RUPIAS A PERSONAJE (Staff) ---
@@ -749,30 +1255,25 @@ client.on('messageCreate', async message => {
 
         const nombrePersonaje = matches[0][1];
         const personajeKey = generarPersonajeKey(targetUser.id, nombrePersonaje);
-        
-        try {
-            let personaje = await personajesDB.get(personajeKey);
+        let personaje = await personajesDB.get(personajeKey);
 
-            personaje.rupias = (personaje.rupias || 0) + cantidad;
-            await personajesDB.set(personajeKey, personaje);
-
-            const embed = new EmbedBuilder()
-                .setColor(REWARD_EMBED_COLOR)
-                .setTitle(`💰 Rupias Añadidas`)
-                .setDescription(`Se han añadido **${cantidad}** rupias al personaje **${personaje.nombre}**.`)
-                .addFields(
-                    { name: 'Propietario', value: targetUser.tag, inline: true },
-                    { name: 'Rupias Totales', value: personaje.rupias.toString(), inline: true }
-                );
-
-            message.channel.send({ content: `**[Staff]** Transferencia realizada.`, embeds: [embed] });
-        } catch (error) {
-            if (error.code === 'NotFoundError') {
-                return message.reply(`Error: No se encontró al personaje **${nombrePersonaje}** para ${targetUser}.`);
-            }
-            console.error(error);
-            return message.reply('Ocurrió un error al procesar las rupias.');
+        if (!personaje) {
+            return message.reply(`Error: No se encontró al personaje **${nombrePersonaje}** para ${targetUser}.`);
         }
+
+        personaje.rupias = (personaje.rupias || 0) + cantidad;
+        await personajesDB.set(personajeKey, personaje);
+
+        const embed = new EmbedBuilder()
+            .setColor(REWARD_EMBED_COLOR)
+            .setTitle(`💰 Rupias Añadidas`)
+            .setDescription(`Se han añadido **${cantidad}** rupias al personaje **${personaje.nombre}**.`)
+            .addFields(
+                { name: 'Propietario', value: targetUser.tag, inline: true },
+                { name: 'Rupias Totales', value: personaje.rupias.toString(), inline: true }
+            );
+
+        message.channel.send({ content: `**[Staff]** Transferencia realizada.`, embeds: [embed] });
     }
 
 
@@ -811,13 +1312,9 @@ client.on('messageCreate', async message => {
 
         const id = generarKeyLimpia(nombre);
 
-        try {
-            const existingEnemy = await enemigosDB.get(id);
-            if (existingEnemy) {
-                return message.reply(`¡El enemigo **${nombre}** ya está registrado!`);
-            }
-        } catch (error) {
-            // No existe, continuar
+        const existingEnemy = await enemigosDB.get(id);
+        if (existingEnemy) {
+            return message.reply(`¡El enemigo **${nombre}** ya está registrado!`);
         }
 
         const newEnemy = {
@@ -855,29 +1352,24 @@ client.on('messageCreate', async message => {
 
         const nombreEnemigo = match[1];
         const id = generarKeyLimpia(nombreEnemigo);
-        
-        try {
-            const enemigo = await enemigosDB.get(id);
+        const enemigo = await enemigosDB.get(id);
 
-            const embed = new EmbedBuilder()
-                .setColor(ENEMY_EMBED_COLOR)
-                .setTitle(`👹 Ficha de Enemigo: ${enemigo.nombre}`)
-                .addFields(
-                    { name: 'HP Base', value: enemigo.hp.toString(), inline: true },
-                    { name: 'Mensaje de Aparición', value: enemigo.mensajeAparicion, inline: false },
-                    { name: 'Pluralización Automática', value: enemigo.pluralizar_nombre ? 'Sí (añade "s")' : 'No (usa nombre base)', inline: true }
-                )
-                .setImage(enemigo.imagen)
-                .setFooter({ text: `Registrado por: ${enemigo.registradoPor || 'Desconocido'}` });
-
-            message.channel.send({ embeds: [embed] });
-        } catch (error) {
-            if (error.code === 'NotFoundError') {
-                 return message.reply(`No se encontró ningún enemigo llamado **${nombreEnemigo}** en el Compendio de Monstruos.`);
-            }
-            console.error(error);
-            return message.reply('Ocurrió un error al buscar el enemigo.');
+        if (!enemigo) {
+            return message.reply(`No se encontró ningún enemigo llamado **${nombreEnemigo}** en el Compendio de Monstruos.`);
         }
+
+        const embed = new EmbedBuilder()
+            .setColor(ENEMY_EMBED_COLOR)
+            .setTitle(`👹 Ficha de Enemigo: ${enemigo.nombre}`)
+            .addFields(
+                { name: 'HP Base', value: enemigo.hp.toString(), inline: true },
+                { name: 'Mensaje de Aparición', value: enemigo.mensajeAparicion, inline: false },
+                { name: 'Pluralización Automática', value: enemigo.pluralizar_nombre ? 'Sí (añade "s")' : 'No (usa nombre base)', inline: true }
+            )
+            .setImage(enemigo.imagen)
+            .setFooter({ text: `Registrado por: ${enemigo.registradoPor || 'Desconocido'}` });
+
+        message.channel.send({ embeds: [embed] });
     }
 
     // --- COMANDO: ELIMINAR ENEMIGO (Staff) ---
@@ -896,23 +1388,19 @@ client.on('messageCreate', async message => {
         const nombreEnemigo = match[1];
         const id = generarKeyLimpia(nombreEnemigo);
 
-        try {
-            const enemigoEliminado = await enemigosDB.get(id);
-            await enemigosDB.delete(id);
-
-            const embed = new EmbedBuilder()
-                .setColor('#cc0000')
-                .setTitle(`🗑️ Enemigo Eliminado: ${enemigoEliminado.nombre}`)
-                .setDescription(`El enemigo **${enemigoEliminado.nombre}** ha sido borrado permanentemente de la base de datos.`);
-
-            message.channel.send({ embeds: [embed] });
-        } catch (error) {
-            if (error.code === 'NotFoundError') {
-                return message.reply(`No se encontró ningún enemigo llamado **${nombreEnemigo}** en la base de datos.`);
-            }
-            console.error(error);
-            return message.reply('Ocurrió un error al eliminar el enemigo.');
+        const enemigoEliminado = await enemigosDB.get(id);
+        if (!enemigoEliminado) {
+            return message.reply(`No se encontró ningún enemigo llamado **${nombreEnemigo}** en la base de datos.`);
         }
+
+        await enemigosDB.delete(id);
+
+        const embed = new EmbedBuilder()
+            .setColor('#cc0000')
+            .setTitle(`🗑️ Enemigo Eliminado: ${enemigoEliminado.nombre}`)
+            .setDescription(`El enemigo **${enemigoEliminado.nombre}** ha sido borrado permanentemente de la base de datos.`);
+
+        message.channel.send({ embeds: [embed] });
     }
 
     // --- COMANDO: SPAWN ENEMIGO (Staff) ---
@@ -945,18 +1433,15 @@ client.on('messageCreate', async message => {
                 const firstPart = partsAfterQuote[0].toLowerCase();
                 const lastPart = partsAfterQuote[partsAfterQuote.length - 1].toLowerCase();
 
-                // Buscar cantidad
                 if (!isNaN(parseInt(firstPart))) {
                     cantidad = parseInt(firstPart);
                 }
 
-                // Buscar 'sinbotones'
                 if (firstPart === 'sinbotones' || lastPart === 'sinbotones' || partsAfterQuote.includes('sinbotones')) {
                     sinBotones = true;
                 }
             }
         } else if (argsList.length >= 2) {
-            // Caso sin comillas (asumiendo que el nombre es una sola palabra)
             nombreEnemigo = argsList[1];
             if (argsList.length > 2 && !isNaN(parseInt(argsList[2]))) {
                 cantidad = parseInt(argsList[2]);
@@ -969,71 +1454,66 @@ client.on('messageCreate', async message => {
         }
 
         const enemigoId = generarKeyLimpia(nombreEnemigo);
-        
-        try {
-            const enemigoBase = await enemigosDB.get(enemigoId);
+        const enemigoBase = await enemigosDB.get(enemigoId);
 
-            cantidad = Math.max(1, Math.min(10, cantidad)); // Limitar a 10 enemigos
-
-            const targetChannel = client.channels.cache.get(canalId);
-            if (!targetChannel) {
-                return message.reply('No se pudo encontrar ese Canal ID. Asegúrate de que el bot tenga acceso.');
-            }
-
-            const isPlural = cantidad > 1;
-
-            let nombreEnemigoPlural = enemigoBase.nombre;
-            if (isPlural) {
-                if (enemigoBase.pluralizar_nombre !== false) {
-                    nombreEnemigoPlural += 's';
-                }
-            }
-
-            const spawnMessage = isPlural
-                ? `¡Varios **${nombreEnemigoPlural}** han aparecido de repente! (${enemigoBase.nombre} x${cantidad})`
-                : enemigoBase.mensajeAparicion;
-
-            const titleText = `⚔️ ¡ALERTA! Enemigo${isPlural ? '(s)' : ''} a la vista: ${enemigoBase.nombre}!`;
-
-            const spawnEmbed = new EmbedBuilder()
-                .setColor(ENEMY_EMBED_COLOR)
-                .setTitle(titleText)
-                .setDescription(spawnMessage)
-                .addFields(
-                    { name: 'HP Base', value: enemigoBase.hp.toString(), inline: true },
-                    { name: 'Cantidad', value: cantidad.toString(), inline: true }
-                )
-                .setThumbnail(enemigoBase.imagen)
-                .setFooter({ text: `Encuentro activo en el canal ${targetChannel.name}.` });
-
-            let components = [];
-            if (!sinBotones) {
-                const buttonRow = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder()
-                        .setCustomId('enemy_accept')
-                        .setLabel('Aceptar')
-                        .setStyle(ButtonStyle.Success),
-                    new ButtonBuilder()
-                        .setCustomId('enemy_deny')
-                        .setLabel('Denegar')
-                        .setStyle(ButtonStyle.Danger)
-                );
-                components.push(buttonRow);
-            }
-
-            await targetChannel.send({ embeds: [spawnEmbed], components: components });
-
-            message.reply(`✅ **${cantidad}x ${enemigoBase.nombre}** invocado(s) en ${targetChannel}${sinBotones ? ' (sin botones de acción)' : ''}.`);
-        } catch (error) {
-            if (error.code === 'NotFoundError') {
-                return message.reply(`El enemigo **${nombreEnemigo}** no está registrado. Usa \`!Zcrearenemigo\`.`);
-            }
-            console.error(error);
-            return message.reply('Ocurrió un error al invocar al enemigo.');
+        if (!enemigoBase) {
+            return message.reply(`El enemigo **${nombreEnemigo}** no está registrado. Usa \`!Zcrearenemigo\`.`);
         }
+
+        cantidad = Math.max(1, Math.min(10, cantidad));
+
+        const targetChannel = client.channels.cache.get(canalId);
+        if (!targetChannel) {
+            return message.reply('No se pudo encontrar ese Canal ID. Asegúrate de que el bot tenga acceso.');
+        }
+
+        const isPlural = cantidad > 1;
+
+        let nombreEnemigoPlural = enemigoBase.nombre;
+        if (isPlural) {
+            if (enemigoBase.pluralizar_nombre !== false) {
+                nombreEnemigoPlural += 's';
+            }
+        }
+
+        const spawnMessage = isPlural
+            ? `¡Varios **${nombreEnemigoPlural}** han aparecido de repente!`
+            : enemigoBase.mensajeAparicion;
+
+        const titleText = `⚔️ ¡ALERTA! Enemigo${isPlural ? '(s)' : ''} a la vista: ${enemigoBase.nombre}!`;
+
+        const spawnEmbed = new EmbedBuilder()
+            .setColor(ENEMY_EMBED_COLOR)
+            .setTitle(titleText)
+            .setDescription(spawnMessage)
+            .addFields(
+                { name: 'HP Base', value: enemigoBase.hp.toString(), inline: true },
+                { name: 'Cantidad', value: cantidad.toString(), inline: true }
+            )
+            .setThumbnail(enemigoBase.imagen)
+            .setFooter({ text: `Encuentro activo en el canal ${targetChannel.name}.` });
+
+        let components = [];
+        if (!sinBotones) {
+            const buttonRow = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setCustomId('enemy_accept')
+                    .setLabel('Aceptar')
+                    .setStyle(ButtonStyle.Success),
+                new ButtonBuilder()
+                    .setCustomId('enemy_deny')
+                    .setLabel('Denegar')
+                    .setStyle(ButtonStyle.Danger)
+            );
+            components.push(buttonRow);
+        }
+
+        await targetChannel.send({ embeds: [spawnEmbed], components: components });
+
+        message.reply(`✅ **${cantidad}x ${enemigoBase.nombre}** invocado(s) en ${targetChannel}${sinBotones ? ' (sin botones de acción)' : ''}.`);
     }
 
-    // --- COMANDO: CREAR COFRE (Staff) ---
+    // --- COMANDO: CREAR COFRE (Staff) - MODIFICADO BOTÓN CUSTOM ID
     if (command === 'crearcofre') {
         if (!hasAdminPerms) {
             return message.reply('¡Solo los Administradores Canon pueden crear cofres!');
@@ -1056,43 +1536,37 @@ client.on('messageCreate', async message => {
         const itemId = generarKeyLimpia(nombreItem);
 
         const cofre = CHEST_TYPES[tipoCofre];
+        const item = await compendioDB.get(itemId);
 
         if (!cofre) {
             return message.reply(`Tipo de cofre inválido. Tipos permitidos: \`${Object.keys(CHEST_TYPES).join(', ')}\`.`);
         }
-        
-        try {
-            const item = await compendioDB.get(itemId);
-            
-            const targetChannel = client.channels.cache.get(canalId);
-            if (!targetChannel) {
-                return message.reply('No se pudo encontrar ese Canal ID. Asegúrate de que el bot tenga acceso.');
-            }
-
-            const treasureEmbed = new EmbedBuilder()
-                .setColor(TREASURE_EMBED_COLOR)
-                .setTitle(`🔑 ¡Tesoro Encontrado! 🎁`)
-                .setDescription(`¡Un cofre ha aparecido de la nada! ¡Ábrelo para revelar el tesoro!`)
-                .setThumbnail(cofre.img)
-                .setFooter({ text: `Pulsa el botón para interactuar. Contiene: ${item.nombre}` }); // Pequeño spoiler para staff
-
-            const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder()
-                    // El custom ID lleva el item ID y el tipo de cofre para el manejo de la interacción
-                    .setCustomId(`open_chest_${itemId}-${tipoCofre}`)
-                    .setLabel(`Abrir ${cofre.nombre}`)
-                    .setStyle(ButtonStyle.Success)
-            );
-
-            targetChannel.send({ embeds: [treasureEmbed], components: [row] });
-            message.reply(`✅ **${cofre.nombre}** creado en ${targetChannel} con el item **${item.nombre}** dentro.`);
-        } catch (error) {
-            if (error.code === 'NotFoundError') {
-                 return message.reply(`El item **${nombreItem}** no está registrado en el compendio.`);
-            }
-            console.error(error);
-            return message.reply('Ocurrió un error al crear el cofre.');
+        if (!item) {
+            return message.reply(`El item **${nombreItem}** no está registrado en el compendio.`);
         }
+
+        const targetChannel = client.channels.cache.get(canalId);
+        if (!targetChannel) {
+            return message.reply('No se pudo encontrar ese Canal ID. Asegúrate de que el bot tenga acceso.');
+        }
+
+        const treasureEmbed = new EmbedBuilder()
+            .setColor(TREASURE_EMBED_COLOR)
+            .setTitle(`🔑 ¡Tesoro Encontrado! 🎁`)
+            .setDescription(`¡Un cofre ha aparecido de la nada! ¡Ábrelo para revelar el tesoro!`)
+            .setThumbnail(cofre.img)
+            .setFooter({ text: `Pulsa el botón para interactuar. Contiene: ${item.nombre}` }); // Pequeño spoiler para staff
+
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                // El custom ID ahora lleva el item ID y el tipo de cofre
+                .setCustomId(`open_chest_${itemId}-${tipoCofre}`)
+                .setLabel(`Abrir ${cofre.nombre}`)
+                .setStyle(ButtonStyle.Success)
+        );
+
+        targetChannel.send({ embeds: [treasureEmbed], components: [row] });
+        message.reply(`✅ **${cofre.nombre}** creado en ${targetChannel} con el item **${item.nombre}** dentro.`);
     }
 
     // --- COMANDO: LISTAR ENEMIGOS (Público) ---
