@@ -1619,7 +1619,7 @@ client.on('messageCreate', async message => {
         message.reply(`✅ **${cantidad}x ${enemigoBase.nombre}** invocado(s) en ${targetChannel}${sinBotones ? ' (sin botones de acción)' : ''}.`);
     }
 
-    // --- MODIFICACIÓN: COMANDO CREAR COFRE ---
+    // --- CORRECCIÓN Y SIMPLIFICACIÓN: COMANDO CREAR COFRE ---
     if (command === 'crearcofre') {
         // Asegurar que solo Staff puede usar este comando
         if (!message.member.roles.cache.has(STAFF_ROLE_ID)) {
@@ -1627,53 +1627,40 @@ client.on('messageCreate', async message => {
         }
 
         const args = fullCommand.slice(prefix.length + command.length).trim();
-        // Regex para capturar: <CanalID>, "Tipo", y el objeto JSON de ítems.
-        // Asume que la ID del canal es el primer argumento, seguido por dos argumentos entre comillas (el último es el JSON)
-        const cofreRegex = /^(\d+)\s+"([^"]+)"\s+({[\s\S]+})$/;
+        // Regex simplificada para capturar: <CanalID>, "Tipo", e "ID_ITEM".
+        const cofreRegex = /^(\d+)\s+"([^"]+)"\s+"([^"]+)"$/;
         const cofreMatch = args.match(cofreRegex);
 
         if (!cofreMatch) {
-            return message.reply('Uso: `!Zcrearcofre <ID Canal> "Tipo (pequeño/grande/jefe)" { "ID_ITEM_1": CANTIDAD, "ID_ITEM_2": OTRA_CANTIDAD }`');
+            return message.reply('Uso: `!Zcrearcofre <ID Canal> "Tipo (pequeño/grande/jefe)" "ID_ITEM"`');
         }
 
         const canalID = cofreMatch[1];
         const tipoCofre = cofreMatch[2];
-        const itemsJsonString = cofreMatch[3];
+        const itemId = cofreMatch[3]; // Ahora es una ID simple
 
-        let items;
-        try {
-            // Parsear el string JSON de los ítems
-            items = JSON.parse(itemsJsonString);
-        } catch (e) {
-            return message.reply(`⛔ Error al parsear el objeto JSON de ítems. Asegúrate de que las ID de los ítems estén entre comillas dobles (ej: \`"rupia_roja": 1\`).`);
+        // 🚩 VALIDACIÓN CLAVE: Verificar que la ID del ítem existe
+        const itemData = await compendioDB.get(itemId);
+
+        if (!itemData) {
+            return message.reply(`⛔ Error: La ID de ítem \`${itemId}\` no existe en el Compendio. Usa \`!Zmostraritemid\` para verificar la ID.`);
         }
 
-        // 🚩 VALIDACIÓN CLAVE: Verificar que todas las IDs de los ítems existen
-        for (const id in items) {
-            if (items.hasOwnProperty(id)) {
-                if (typeof items[id] !== 'number' || items[id] <= 0) {
-                    return message.reply(`⛔ Error: La cantidad para la ID \`${id}\` debe ser un número positivo.`);
-                }
-                const itemData = await compendioDB.get(id);
-
-                if (!itemData) {
-                    return message.reply(`⛔ Error: La ID de ítem \`${id}\` no existe en el Compendio. Usa \`!Zmostraritemid\` para verificar las IDs.`);
-                }
-            }
-        }
+        // Creamos el objeto 'items' con la ID como clave y cantidad 1
+        const items = { [itemId]: 1 };
 
         const nuevoCofre = {
             canalId: canalID,
             tipo: tipoCofre,
-            items: items, // Ya tiene las IDs internas como claves
+            items: items, // Objeto: { "ID_ITEM": 1 }
             registradoPor: message.author.tag,
             fechaCreacion: new Date().toISOString()
         };
 
-        const cofreKey = generarKeyLimpia(tipoCofre + '_' + canalID); // Puedes ajustar la clave si usas otra convención
+        const cofreKey = generarKeyLimpia(tipoCofre + '_' + canalID);
         await cofresDB.set(cofreKey, nuevoCofre);
 
-        message.channel.send({ content: `✅ Cofre **${tipoCofre}** creado exitosamente para el canal **${canalID}**. Contiene **${Object.keys(items).length}** ítems diferentes (usando ID interna).` });
+        message.channel.send({ content: `✅ Cofre **${tipoCofre}** creado exitosamente para el canal **${canalID}**. Contiene: **x1 ${itemData.nombre}** (ID: \`${itemId}\`).` });
     }
 });
 
