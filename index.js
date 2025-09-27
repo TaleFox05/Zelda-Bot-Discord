@@ -685,17 +685,66 @@ client.on('interactionCreate', async interaction => {
 });
 
 client.on('messageCreate', async message => {
+    // Ignorar si el mensaje es de un bot
     if (message.author.bot) return;
 
-    // Nota: hasAdminPerms utiliza 'message.member.roles.cache.has' y 'message.member.permissions.has'.
-    // Esta verificación solo funciona en servidores.
-    const hasAdminPerms = message.member && (message.member.roles.cache.has(ADMIN_ROLE_ID) || message.member.permissions.has(PermissionsBitField.Flags.Administrator));
+    // Asumiendo que tu prefijo es la variable 'prefix' (ej: '!Z')
+    if (!message.content.startsWith(prefix)) return;
 
-    if (!message.content.startsWith(PREFIX)) return;
+    // 1. Separar el prefijo del resto del mensaje
+    const messageContent = message.content.slice(prefix.length).trim();
 
-    const fullCommand = message.content.slice(PREFIX.length).trim();
-    const args = fullCommand.split(/ +/);
-    const command = args.shift().toLowerCase();
+    // 2. Separar el comando del resto de los argumentos
+    const parts = messageContent.split(/\s+/);
+    const command = parts[0].toLowerCase();
+
+    // 3. Reconstruir el fullCommand y args para el switch/if de abajo
+    const args = messageContent.slice(command.length).trim();
+    const fullCommand = command + ' ' + args;
+
+    // --- COMANDO: CREAR COFRE (Staff - Corregido y Simplificado) ---
+    if (command === 'crearcofre') {
+        // Asegurar que solo Staff puede usar este comando
+        if (!message.member.roles.cache.has(STAFF_ROLE_ID)) {
+            return message.reply('❌ Solo el Staff tiene permiso para crear cofres.');
+        }
+
+        // Regex simplificada para capturar: <CanalID>, "Tipo", e "ID_ITEM".
+        // La expresión busca un número, seguido por dos cadenas entre comillas.
+        const cofreRegex = /^(\d+)\s+"([^"]+)"\s+"([^"]+)"$/;
+        const cofreMatch = args.match(cofreRegex);
+
+        if (!cofreMatch) {
+            return message.reply('Uso: `!Zcrearcofre <ID Canal> "Tipo (pequeño/grande/jefe)" "ID_ITEM"`');
+        }
+
+        const canalID = cofreMatch[1];
+        const tipoCofre = cofreMatch[2];
+        const itemId = cofreMatch[3]; // Ahora es una ID simple
+
+        // 🚩 VALIDACIÓN CLAVE: Verificar que la ID del ítem existe
+        const itemData = await compendioDB.get(itemId);
+
+        if (!itemData) {
+            return message.reply(`⛔ Error: La ID de ítem \`${itemId}\` no existe en el Compendio. Usa \`!Zmostraritemid\` para verificar la ID.`);
+        }
+
+        // Creamos el objeto 'items' con la ID como clave y cantidad 1
+        const items = { [itemId]: 1 };
+
+        const nuevoCofre = {
+            canalId: canalID,
+            tipo: tipoCofre,
+            items: items, // Objeto: { "ID_ITEM": 1 }
+            registradoPor: message.author.tag,
+            fechaCreacion: new Date().toISOString()
+        };
+
+        const cofreKey = generarKeyLimpia(tipoCofre + '_' + canalID);
+        await cofresDB.set(cofreKey, nuevoCofre);
+
+        message.channel.send({ content: `✅ Cofre **${tipoCofre}** creado exitosamente para el canal **${canalID}**. Contiene: **x1 ${itemData.nombre}** (ID: \`${itemId}\`).` });
+    }
 
 
     // --- COMANDO: HELP ---
