@@ -608,17 +608,25 @@ client.on('messageCreate', async message => {
     }
 
     // --- COMANDO: DAR ITEM (Pruebas) ---
-    if (command === 'dar') {
+    if (command === 'daritem') {
         try {
-            const regex = /"([^"]+)"/;
-            const match = fullCommand.match(regex);
+            const regex = /"([^"]+)"/g;
+            const matches = [...fullCommand.matchAll(regex)];
+            const cantidadMatch = fullCommand.match(/\b(\d+)\b/);
 
-            if (!match) {
-                return message.reply('Uso: `!Zdar "Nombre del Objeto"`');
+            if (matches.length !== 2 || !cantidadMatch) {
+                return message.reply('Uso: `!Zdaritem "Nombre del Objeto" "Nombre del Personaje" cantidad` (ejemplo: `!Zdaritem "Rupia Verde" "Link" 5`)');
             }
 
-            const nombreItem = match[1];
-            console.log(`Buscando ítem para otorgar: ${nombreItem}`);
+            const nombreItem = matches[0][1];
+            const nombrePj = matches[1][1];
+            const cantidad = parseInt(cantidadMatch[1]) || 1;
+
+            if (cantidad <= 0) {
+                return message.reply('La cantidad debe ser un número entero positivo.');
+            }
+
+            console.log(`Buscando ítem: ${nombreItem} para personaje: ${nombrePj}, cantidad: ${cantidad}`);
             const items = await obtenerTodosItems();
             const item = items.find(i => i.nombre === nombreItem);
 
@@ -627,23 +635,33 @@ client.on('messageCreate', async message => {
                 return message.reply(`No se encontró un objeto disponible con el nombre **${nombreItem}** en el Compendio de Hyrule.`);
             }
 
-            const pjId = await obtenerSiguientePjId(message.author.id);
+            const personajes = await obtenerTodosPersonajes();
+            const personaje = personajes.find(p => p.nombre.toLowerCase() === nombrePj.toLowerCase());
+
+            if (!personaje) {
+                console.log(`Personaje no encontrado: ${nombrePj}`);
+                return message.reply(`No se encontró ningún héroe con el nombre **${nombrePj}**.`);
+            }
+
+            const pjId = personaje.id;
             const inventario = await inventariosDB.get(pjId) || { pjId, rupias: 100, items: [] };
             const now = new Date();
 
             if (item.tipo === 'moneda') {
-                inventario.rupias += item.valorRupia;
-                console.log(`Otorgadas ${item.valorRupia} Rupias a ${pjId}`);
+                inventario.rupias += item.valorRupia * cantidad;
+                console.log(`Otorgadas ${item.valorRupia * cantidad} Rupias a ${pjId}`);
             } else if (item.tipo === 'objeto' || item.tipo === 'keyitem') {
-                if (inventario.items.length >= 25) {
-                    return message.reply('Tu inventario está lleno (máximo 25 objetos).');
+                if (inventario.items.length + cantidad > 25) {
+                    return message.reply('El inventario excedería el límite de 25 objetos con esta cantidad.');
                 }
-                inventario.items.push({
-                    ...item,
-                    fechaObtencion: now.toLocaleDateString('es-ES'),
-                    disponible: false
-                });
-                console.log(`Ítem ${item.nombre} añadido al inventario de ${pjId}`);
+                for (let i = 0; i < cantidad; i++) {
+                    inventario.items.push({
+                        ...item,
+                        fechaObtencion: now.toLocaleDateString('es-ES'),
+                        disponible: false
+                    });
+                }
+                console.log(`Ítem ${item.nombre} x${cantidad} añadido al inventario de ${pjId}`);
             }
 
             await inventariosDB.set(pjId, inventario);
@@ -652,20 +670,104 @@ client.on('messageCreate', async message => {
 
             const embed = new EmbedBuilder()
                 .setColor(LIST_EMBED_COLOR)
-                .setTitle(`🎁 Ítem Otorgado: ${item.nombre}`)
-                .setDescription(`¡Has recibido un tesoro en Nuevo Hyrule!`)
+                .setTitle(`🎁 Ítem Otorgado: ${item.nombre} x${cantidad}`)
+                .setDescription(`¡${personaje.nombre} ha recibido un tesoro en Nuevo Hyrule!`)
                 .addFields(
                     { name: 'ID', value: item.id, inline: true },
                     { name: 'Tipo', value: item.tipo.toUpperCase(), inline: true },
                     { name: 'Descripción', value: item.descripcion, inline: false }
                 )
                 .setThumbnail(item.imagen || null)
-                .setFooter({ text: `Otorgado a: ${message.author.tag} | ${now.toLocaleString('es-ES')}` });
+                .setFooter({ text: `Otorgado a: ${personaje.nombre} | ${now.toLocaleString('es-ES')}` });
 
             await message.channel.send({ embeds: [embed] });
         } catch (error) {
-            console.error('Error en !Zdar:', error);
+            console.error('Error en !Zdaritem:', error);
             await message.reply('¡Error al otorgar el ítem! Contacta a un administrador.');
+        }
+    }
+
+    // --- COMANDO: QUITAR ITEMS (Pruebas) ---
+    if (command === 'quitaritems') {
+        try {
+            const regex = /"([^"]+)"/g;
+            const matches = [...fullCommand.matchAll(regex)];
+
+            if (matches.length !== 2) {
+                return message.reply('Uso: `!Zquitaritems "Nombre del Personaje" "Nombre del Item"` o `!Zquitaritems "Nombre del Personaje" todos`');
+            }
+
+            const nombrePj = matches[0][1];
+            const inputItem = matches[1][1];
+
+            console.log(`Buscando personaje: ${nombrePj} para quitar ${inputItem}`);
+            const personajes = await obtenerTodosPersonajes();
+            const personaje = personajes.find(p => p.nombre.toLowerCase() === nombrePj.toLowerCase());
+
+            if (!personaje) {
+                console.log(`Personaje no encontrado: ${nombrePj}`);
+                return message.reply(`No se encontró ningún héroe con el nombre **${nombrePj}**.`);
+            }
+
+            const pjId = personaje.id;
+            const inventario = await inventariosDB.get(pjId);
+
+            if (!inventario || !inventario.items || inventario.items.length === 0) {
+                console.log(`Inventario vacío o no encontrado para ${pjId}`);
+                return message.reply(`El inventario de **${nombrePj}** está vacío o no existe.`);
+            }
+
+            const items = await obtenerTodosItems();
+            const now = new Date();
+
+            if (inputItem.toLowerCase() === 'todos') {
+                const removedItems = inventario.items;
+                inventario.items = [];
+                inventario.rupias = 100; // Resetear Rupias a valor inicial
+                console.log(`Todos los ítems eliminados del inventario de ${pjId}`);
+
+                // Restaurar disponibilidad de ítems en compendio
+                for (const item of removedItems) {
+                    const compendioItem = items.find(i => i.id === item.id);
+                    if (compendioItem) {
+                        compendioItem.disponible = true;
+                        await compendioDB.set(compendioItem.id, compendioItem);
+                    }
+                }
+            } else {
+                const itemIndex = inventario.items.findIndex(i => i.nombre.toLowerCase() === inputItem.toLowerCase());
+                if (itemIndex === -1) {
+                    console.log(`Ítem ${inputItem} no encontrado en el inventario de ${pjId}`);
+                    return message.reply(`No se encontró el ítem **${inputItem}** en el inventario de **${nombrePj}**.`);
+                }
+
+                const removedItem = inventario.items.splice(itemIndex, 1)[0];
+                console.log(`Ítem ${removedItem.nombre} eliminado del inventario de ${pjId}`);
+
+                // Restaurar disponibilidad en compendio
+                const compendioItem = items.find(i => i.id === removedItem.id);
+                if (compendioItem) {
+                    compendioItem.disponible = true;
+                    await compendioDB.set(compendioItem.id, compendioItem);
+                }
+            }
+
+            await inventariosDB.set(pjId, inventario);
+
+            const embed = new EmbedBuilder()
+                .setColor(DELETE_EMBED_COLOR)
+                .setTitle(`🗑️ Ítems Eliminados de ${personaje.nombre}`)
+                .setDescription(`¡Se han retirado ítems del inventario de ${personaje.nombre}!`)
+                .addFields(
+                    { name: 'Acción', value: inputItem.toLowerCase() === 'todos' ? 'Todos los ítems eliminados' : `Ítem ${inputItem} eliminado`, inline: false }
+                )
+                .setThumbnail(personaje.imagen || null)
+                .setFooter({ text: `Eliminado por: ${message.author.tag} | ${now.toLocaleString('es-ES')}` });
+
+            await message.channel.send({ embeds: [embed] });
+        } catch (error) {
+            console.error('Error en !Zquitaritems:', error);
+            await message.reply('¡Error al quitar ítems del inventario! Contacta a un administrador.');
         }
     }
 
