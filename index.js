@@ -1,6 +1,6 @@
 // Carga la librería 'dotenv' para leer el archivo .env
 require('dotenv').config();
-const { Client, GatewayIntentBits, PermissionsBitField, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { Client, GatewayIntentBits, PermissionsBitField, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, Attachment } = require('discord.js');
 const Keyv = require('keyv');
 
 // Configuración
@@ -9,17 +9,18 @@ const ADMIN_ROLE_ID = "1420026299090731050";
 const LIST_EMBED_COLOR = '#427522';
 const DELETE_EMBED_COLOR = '#D11919';
 const TIPOS_VALIDOS = ['moneda', 'objeto', 'keyitem'];
-const RAZAS_VALIDAS = ['Deku', 'Gerudo', 'Goron', 'Hada', 'Hyliano', 'Kokiri', 'Kolog', 'Minish', 'Orni', 'Sheikah', 'Skull Kid', 'Twili', 'Zora'];
 
 // Bases de datos
 const compendioDB = new Keyv(process.env.REDIS_URL, { namespace: 'items' });
 const personajesDB = new Keyv(process.env.REDIS_URL, { namespace: 'personajes' });
 const inventariosDB = new Keyv(process.env.REDIS_URL, { namespace: 'inventarios' });
+const contadorDB = new Keyv(process.env.REDIS_URL, { namespace: 'contadores' }); // Para IDs únicos
 
 // Manejo de errores en Redis
 compendioDB.on('error', err => console.error('Error en Redis (items):', err));
 personajesDB.on('error', err => console.error('Error en Redis (personajes):', err));
 inventariosDB.on('error', err => console.error('Error en Redis (inventarios):', err));
+contadorDB.on('error', err => console.error('Error en Redis (contadores):', err));
 
 // Cliente de Discord
 const client = new Client({
@@ -27,7 +28,8 @@ const client = new Client({
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMessageReactions
+        GatewayIntentBits.GuildMessageReactions,
+        GatewayIntentBits.MessageAttachments
     ]
 });
 
@@ -53,6 +55,15 @@ async function verificarRedis(db) {
 function isValidImageUrl(url) {
     if (!url) return false;
     return url.match(/\.(jpeg|jpg|png|gif|bmp|webp)$/i) !== null;
+}
+
+// Función para obtener un ID único para personajes
+async function getUniquePjId(userId) {
+    let counter = await contadorDB.get(`pj_${userId}`);
+    if (!counter) counter = 0;
+    counter++;
+    await contadorDB.set(`pj_${userId}`, counter);
+    return `pj_${userId}_${counter}`;
 }
 
 // Función para obtener todos los ítems del compendio
@@ -129,7 +140,7 @@ function createItemEmbedPage(items, pageIndex) {
 }
 
 // Función para crear el embed del inventario
-function createInventoryEmbedPage(inventoryItems, pageIndex, rupias, personajeNombre) {
+function createInventoryEmbedPage(inventoryItems, pageIndex, rupias, personajeNombre, creador) {
     const ITEMS_PER_PAGE = 5;
     const start = pageIndex * ITEMS_PER_PAGE;
     const end = start + ITEMS_PER_PAGE;
@@ -138,19 +149,22 @@ function createInventoryEmbedPage(inventoryItems, pageIndex, rupias, personajeNo
 
     const embed = new EmbedBuilder()
         .setColor(LIST_EMBED_COLOR)
-        .setTitle(`🎒 Inventario de ${personajeNombre}`)
-        .setDescription(`*Tus tesoros en Nuevo Hyrule.*\n**Rupias:** ${rupias}\n**Objetos (${inventoryItems.length}/25)**`)
-        .setThumbnail(inventoryItems.length > 0 ? inventoryItems[0].imagen : null);
+        .setTitle(`🎒 Inventario de ${personajeNombre}`);
 
-    itemsToShow.forEach(item => {
-        embed.addFields({
-            name: `**${item.nombre}**`,
-            value: `**ID:** ${item.id}\n**Descripción:** ${item.descripcion}\n**Fecha de Obtención:** ${item.fechaObtencion}`,
-            inline: false
+    let description = `*Creado por: ${creador}*\n**Rupias: ${rupias}**\n**Objetos (${inventoryItems.length}/25)**`;
+    if (inventoryItems.length === 0) {
+        description += '\n*Inventario vacío.*';
+    } else {
+        itemsToShow.forEach(item => {
+            embed.addFields({
+                name: `**${item.nombre}**`,
+                value: `**ID:** ${item.id}\n**Descripción:** ${item.descripcion}\n**Fecha de Obtención:** ${item.fechaObtencion || 'N/A'}`,
+                inline: false
+            });
         });
-    });
+    }
 
-    embed.setFooter({ text: `Página ${pageIndex + 1} de ${totalPages}` });
+    embed.setDescription(description);
 
     return { embed, totalPages };
 }
@@ -188,6 +202,7 @@ client.on('ready', async () => {
     await verificarRedis(compendioDB);
     await verificarRedis(personajesDB);
     await verificarRedis(inventariosDB);
+    await verificarRedis(contadorDB);
 });
 
 // Evento: Manejo de comandos
@@ -221,15 +236,18 @@ client.on('messageCreate', async message => {
         try {
             const regex = /"([^"]+)"/g;
             const matches = [...message.content.matchAll(regex)];
+            let imagenUrl = null;
 
-            if (matches.length < 2) {
-                return message.reply('Sintaxis incorrecta. Uso: `!Zcrearpj "Nombre" "URL de la Imagen"`');
+            if (matches.length < 1) {
+                return message.reply('Sintaxis incorrecta. Uso: `!Zcrearpj "Nombre" [URL de la Imagen]` o adjunta una imagen.');
             }
 
             const nombre = matches[0][1];
-            const imagenUrl = matches[1][1];
-            if (!isValidImageUrl(imagenUrl)) {
-                return message.reply('La URL de la imagen no es válida. Usa una URL que termine en .jpg, .png, .gif, .bmp o .webp.');
+            if (matches.length > 1) {
+                imagenUrl = matches[1][1];
+                if (!isValidImageUrl(imagenUrl) && imagenUrl) {
+                    return message.reply('La URL de la imagen no es válida. Usa una URL que termine en .jpg, .png, .gif, .bmp o .webp.');
+                }
             }
 
             const personajes = await obtenerTodosPersonajes();
@@ -237,12 +255,25 @@ client.on('messageCreate', async message => {
                 return message.reply(`¡El héroe **${nombre}** ya está registrado! Usa un nombre diferente.`);
             }
 
-            const pjId = `pj_${message.author.id}_${Date.now()}`;
+            const pjId = await getUniquePjId(message.author.id);
             const now = new Date();
+            let imagen = imagenUrl;
+
+            if (message.attachments.size > 0) {
+                const attachment = message.attachments.first();
+                if (isValidImageUrl(attachment.url)) {
+                    imagen = attachment.url;
+                } else {
+                    return message.reply('La imagen adjuntada no es válida. Usa un formato .jpg, .png, .gif, .bmp o .webp.');
+                }
+            } else if (!imagen) {
+                return message.reply('Debes proporcionar una URL de imagen o adjuntar una imagen.');
+            }
+
             const newPj = {
                 id: pjId,
                 nombre: nombre,
-                imagen: imagenUrl,
+                imagen: imagen,
                 registradoPor: message.author.tag,
                 fecha: now.toLocaleDateString('es-ES'),
                 fechaCreacionMs: now.getTime()
@@ -266,7 +297,7 @@ client.on('messageCreate', async message => {
                     { name: 'ID', value: pjId, inline: true },
                     { name: 'Rupias Iniciales', value: '100', inline: true }
                 )
-                .setThumbnail(imagenUrl)
+                .setThumbnail(imagen)
                 .setFooter({ text: `Registrado por: ${message.author.tag} | Las Diosas dan la bienvenida.` });
 
             await message.channel.send({ embeds: [embed] });
@@ -276,14 +307,14 @@ client.on('messageCreate', async message => {
         }
     }
 
-    // --- COMANDO: INVENTARIO (Público) ---
-    if (command === 'inventario') {
+    // --- COMANDO: INVENTARIO / INV (Público) ---
+    if (command === 'inventario' || command === 'inv') {
         try {
             const regex = /"([^"]+)"/;
             const match = fullCommand.match(regex);
 
             if (!match) {
-                return message.reply('Uso: `!Zinventario "Nombre del Personaje"`');
+                return message.reply('Uso: `!Zinventario "Nombre del Personaje"` o `!Zinv "Nombre del Personaje"`');
             }
 
             const nombrePj = match[1];
@@ -308,26 +339,20 @@ client.on('messageCreate', async message => {
             const items = inventory.items || [];
             const rupias = inventory.rupias || 100;
 
-            if (items.length === 0) {
-                const embed = new EmbedBuilder()
-                    .setColor(LIST_EMBED_COLOR)
-                    .setTitle(`🎒 Inventario de ${personaje.nombre}`)
-                    .setDescription(`*Tu inventario está vacío, pero tienes **${rupias} Rupias**.*\n**Objetos (${items.length}/25)**`)
-                    .setThumbnail(personaje.imagen)
-                    .setFooter({ text: 'Página 1 de 1' });
-                const row = createPaginationRow(0, 1);
-                return message.channel.send({ embeds: [embed], components: [row] });
+            const currentPage = 0;
+            const { embed, totalPages } = createInventoryEmbedPage(items, currentPage, rupias, personaje.nombre, personaje.registradoPor);
+            embed.setThumbnail(personaje.imagen);
+
+            let components = [];
+            if (items.length > 5) {
+                const row = createPaginationRow(currentPage, totalPages);
+                components.push(row);
             }
 
-            const currentPage = 0;
-            const { embed, totalPages } = createInventoryEmbedPage(items, currentPage, rupias, personaje.nombre);
-            embed.setThumbnail(personaje.imagen);
-            const row = createPaginationRow(currentPage, totalPages);
-            console.log(`Enviando embed de !Zinventario (Página ${currentPage + 1} de ${totalPages})`);
-
-            await message.channel.send({ embeds: [embed], components: [row] });
+            console.log(`Enviando embed de !Z${command} (Página ${currentPage + 1} de ${totalPages})`);
+            await message.channel.send({ embeds: [embed], components: components.length > 0 ? components : [] });
         } catch (error) {
-            console.error('Error en !Zinventario:', error);
+            console.error('Error en !Zinventario/!Zinv:', error);
             await message.reply('¡Error al consultar el inventario! Contacta a un administrador.');
         }
     }
@@ -471,19 +496,23 @@ client.on('messageCreate', async message => {
             const match = fullCommand.match(regex);
 
             if (!match) {
-                return message.reply('Uso: `!Zveritem "ID del Objeto"` (Ejemplo: `!Zveritem "item_22"`)');
+                return message.reply('Uso: `!Zveritem "Nombre o ID del Objeto"` (Ejemplo: `!Zveritem "Rupia Verde"` o `!Zveritem "item_22"`)');
             }
 
-            const id = match[1];
-            console.log(`Buscando ítem con ID: ${id}`);
-            const item = await compendioDB.get(id);
+            const input = match[1];
+            console.log(`Buscando ítem con input: ${input}`);
+            let item = await compendioDB.get(input); // Primero intentar por ID
 
             if (!item) {
-                console.log(`Ítem no encontrado: ${id}`);
-                return message.reply(`No se encontró ningún objeto con ID **${id}** en el Compendio de Hyrule.`);
+                const items = await obtenerTodosItems();
+                item = items.find(i => i.nombre === input); // Buscar por nombre exacto
+                if (!item) {
+                    console.log(`Ítem no encontrado: ${input}`);
+                    return message.reply(`No se encontró ningún objeto con nombre o ID **${input}** en el Compendio de Hyrule.`);
+                }
             }
 
-            console.log(`Ítem encontrado: ${id} - ${item.nombre}`);
+            console.log(`Ítem encontrado: ${item.id} - ${item.nombre}`);
             const embed = new EmbedBuilder()
                 .setColor(LIST_EMBED_COLOR)
                 .setTitle(`✨ ${item.nombre}`)
@@ -622,17 +651,6 @@ client.on('interactionCreate', async interaction => {
             const inventory = await inventariosDB.get(pjId);
             items = inventory ? inventory.items || [] : [];
             const rupias = inventory ? inventory.rupias || 100 : 100;
-            if (items.length === 0) {
-                console.log('Inventario vacío durante paginación.');
-                const embedEmpty = new EmbedBuilder()
-                    .setColor(LIST_EMBED_COLOR)
-                    .setTitle(`🎒 Inventario de ${personaje.nombre}`)
-                    .setDescription(`*Tu inventario está vacío, pero tienes **${rupias} Rupias**.*\n**Objetos (${items.length}/25)**`)
-                    .setThumbnail(personaje.imagen)
-                    .setFooter({ text: 'Página 1 de 1' });
-                const row = createPaginationRow(0, 1);
-                return interaction.update({ embeds: [embedEmpty], components: [row] });
-            }
             let newPage = currentPage;
             switch (interaction.customId) {
                 case 'first': newPage = 0; break;
@@ -640,13 +658,17 @@ client.on('interactionCreate', async interaction => {
                 case 'next': newPage = Math.min(totalPages - 1, currentPage + 1); break;
                 case 'last': newPage = totalPages - 1; break;
             }
-            const result = createInventoryEmbedPage(items, newPage, rupias, personaje.nombre);
+            const result = createInventoryEmbedPage(items, newPage, rupias, personaje.nombre, personaje.registradoPor);
             embed = result.embed;
             embed.setThumbnail(personaje.imagen);
             totalPagesNew = result.totalPages;
-            const newRow = createPaginationRow(newPage, totalPagesNew);
+            let components = [];
+            if (items.length > 5) {
+                const newRow = createPaginationRow(newPage, totalPagesNew);
+                components.push(newRow);
+            }
             console.log(`Actualizando paginación: Página ${newPage + 1} de ${totalPagesNew} (Inventario)`);
-            await interaction.update({ embeds: [embed], components: [newRow] });
+            await interaction.update({ embeds: [embed], components: components.length > 0 ? components : [] });
         } else {
             items = await obtenerTodosItems();
             if (items.length === 0) {
