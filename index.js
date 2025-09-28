@@ -9,6 +9,7 @@ const ADMIN_ROLE_ID = "1420026299090731050";
 const LIST_EMBED_COLOR = '#427522';
 const DELETE_EMBED_COLOR = '#D11919';
 const TIPOS_VALIDOS = ['moneda', 'objeto', 'keyitem'];
+const RAZAS_VALIDAS = ['Deku', 'Gerudo', 'Goron', 'Hada', 'Hyliano', 'Kokiri', 'Kolog', 'Minish', 'Orni', 'Sheikah', 'Skull Kid', 'Twili', 'Zora'];
 
 // Bases de datos
 const compendioDB = new Keyv(process.env.REDIS_URL, { namespace: 'items' });
@@ -77,6 +78,27 @@ async function obtenerTodosItems() {
     } catch (error) {
         console.error('Error en obtenerTodosItems:', error);
         throw new Error('No se pudo acceder al Compendio de Hyrule.');
+    }
+}
+
+// Función para obtener todos los personajes
+async function obtenerTodosPersonajes() {
+    try {
+        if (!(await verificarRedis(personajesDB))) {
+            throw new Error('No se pudo conectar con Redis (personajes).');
+        }
+        const personajes = {};
+        for await (const [key, value] of personajesDB.iterator()) {
+            if (value && value.id && value.nombre) {
+                personajes[key] = value;
+            }
+        }
+        const personajesArray = Object.values(personajes);
+        console.log(`Personajes obtenidos en obtenerTodosPersonajes: ${personajesArray.length}`);
+        return personajesArray;
+    } catch (error) {
+        console.error('Error en obtenerTodosPersonajes:', error);
+        throw new Error('No se pudo acceder al registro de héroes.');
     }
 }
 
@@ -200,23 +222,26 @@ client.on('messageCreate', async message => {
             const matches = [...message.content.matchAll(regex)];
 
             if (matches.length < 2) {
-                return message.reply('Sintaxis incorrecta. Uso: `!Zcrearpj "Nombre" "Descripción"`');
+                return message.reply('Sintaxis incorrecta. Uso: `!Zcrearpj "Nombre" "Raza"`');
             }
 
             const nombre = matches[0][1];
-            const descripcion = matches[1][1];
-            const pjId = `pj_${message.author.id}_${Date.now()}`; // ID único basado en usuario y timestamp
-
-            const existingPj = await personajesDB.get(pjId);
-            if (existingPj) {
-                return message.reply('¡El héroe con ID **${pjId}** ya está registrado! Contacta a un administrador.');
+            const raza = matches[1][1];
+            if (!RAZAS_VALIDAS.includes(raza)) {
+                return message.reply(`La raza debe ser una de: ${RAZAS_VALIDAS.join(', ')}.`);
             }
 
+            const personajes = await obtenerTodosPersonajes();
+            if (personajes.some(p => p.nombre.toLowerCase() === nombre.toLowerCase())) {
+                return message.reply(`¡El héroe **${nombre}** ya está registrado! Usa un nombre diferente.`);
+            }
+
+            const pjId = `pj_${message.author.id}_${Date.now()}`;
             const now = new Date();
             const newPj = {
                 id: pjId,
                 nombre: nombre,
-                descripcion: descripcion,
+                raza: raza,
                 registradoPor: message.author.tag,
                 fecha: now.toLocaleDateString('es-ES'),
                 fechaCreacionMs: now.getTime()
@@ -238,7 +263,7 @@ client.on('messageCreate', async message => {
                 .setDescription(`¡Un nuevo héroe ha llegado a Nuevo Hyrule!`)
                 .addFields(
                     { name: 'ID', value: pjId, inline: true },
-                    { name: 'Descripción', value: descripcion, inline: false },
+                    { name: 'Raza', value: raza, inline: true },
                     { name: 'Rupias Iniciales', value: '100', inline: true }
                 )
                 .setFooter({ text: `Registrado por: ${message.author.tag} | Las Diosas dan la bienvenida.` });
@@ -253,13 +278,30 @@ client.on('messageCreate', async message => {
     // --- COMANDO: INVENTARIO (Público) ---
     if (command === 'inventario') {
         try {
-            const pjId = `pj_${message.author.id}_${Date.now()}`; // Temporal: usar el último personaje creado por el usuario
+            const regex = /"([^"]+)"/;
+            const match = fullCommand.match(regex);
+
+            if (!match) {
+                return message.reply('Uso: `!Zinventario "Nombre del Personaje"`');
+            }
+
+            const nombrePj = match[1];
+            console.log(`Buscando personaje: ${nombrePj}`);
+            const personajes = await obtenerTodosPersonajes();
+            const personaje = personajes.find(p => p.nombre.toLowerCase() === nombrePj.toLowerCase());
+
+            if (!personaje) {
+                console.log(`Personaje no encontrado: ${nombrePj}`);
+                return message.reply(`No se encontró ningún héroe con el nombre **${nombrePj}**.`);
+            }
+
+            const pjId = personaje.id;
             console.log(`Buscando inventario para pjId: ${pjId}`);
             const inventory = await inventariosDB.get(pjId);
 
             if (!inventory) {
                 console.log(`Inventario no encontrado para pjId: ${pjId}`);
-                return message.reply('No tienes un héroe registrado. Usa `!Zcrearpj` para crear uno.');
+                return message.reply(`No se encontró el inventario para **${nombrePj}**. Contacta a un administrador.`);
             }
 
             const items = inventory.items || [];
@@ -268,7 +310,7 @@ client.on('messageCreate', async message => {
             if (items.length === 0) {
                 const embed = new EmbedBuilder()
                     .setColor(LIST_EMBED_COLOR)
-                    .setTitle('🎒 Inventario del Héroe')
+                    .setTitle(`🎒 Inventario de ${personaje.nombre}`)
                     .setDescription(`*Tu inventario está vacío, pero tienes **${rupias} Rupias**.*`)
                     .setFooter({ text: 'Página 1 de 1 | Total de ítems: 0' });
                 const row = createPaginationRow(0, 1);
@@ -277,6 +319,7 @@ client.on('messageCreate', async message => {
 
             const currentPage = 0;
             const { embed, totalPages } = createInventoryEmbedPage(items, currentPage, rupias);
+            embed.setTitle(`🎒 Inventario de ${personaje.nombre}`);
             const row = createPaginationRow(currentPage, totalPages);
             console.log(`Enviando embed de !Zinventario (Página ${currentPage + 1} de ${totalPages})`);
 
@@ -284,6 +327,53 @@ client.on('messageCreate', async message => {
         } catch (error) {
             console.error('Error en !Zinventario:', error);
             await message.reply('¡Error al consultar el inventario! Contacta a un administrador.');
+        }
+    }
+
+    // --- COMANDO: ELIMINAR PERSONAJE (Staff) ---
+    if (command === 'eliminarpj') {
+        if (!hasAdminPerms) {
+            console.log('Usuario sin permisos intentó usar !Zeliminarpj:', message.author.tag);
+            return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden eliminar héroes.');
+        }
+
+        try {
+            const regex = /"([^"]+)"/;
+            const match = fullCommand.match(regex);
+
+            if (!match) {
+                return message.reply('Uso: `!Zeliminarpj "Nombre del Personaje"`');
+            }
+
+            const nombrePj = match[1];
+            console.log(`Buscando personaje para eliminar: ${nombrePj}`);
+            const personajes = await obtenerTodosPersonajes();
+            const personaje = personajes.find(p => p.nombre.toLowerCase() === nombrePj.toLowerCase());
+
+            if (!personaje) {
+                console.log(`Personaje no encontrado: ${nombrePj}`);
+                return message.reply(`No se encontró ningún héroe con el nombre **${nombrePj}**.`);
+            }
+
+            const pjId = personaje.id;
+            await personajesDB.delete(pjId);
+            await inventariosDB.delete(pjId);
+            console.log(`Personaje eliminado: ${pjId} - ${nombrePj}`);
+
+            const embed = new EmbedBuilder()
+                .setColor(DELETE_EMBED_COLOR)
+                .setTitle(`🗑️ Héroe Eliminado: ${personaje.nombre}`)
+                .setDescription(`¡El héroe ha abandonado Nuevo Hyrule!`)
+                .addFields(
+                    { name: 'ID', value: pjId, inline: true },
+                    { name: 'Raza', value: personaje.raza, inline: true }
+                )
+                .setFooter({ text: `Eliminado por: ${message.author.tag} | Las Diosas han hablado.` });
+
+            await message.channel.send({ embeds: [embed] });
+        } catch (error) {
+            console.error('Error en !Zeliminarpj:', error);
+            await message.reply('¡Error al eliminar el héroe! Contacta a un administrador.');
         }
     }
 
@@ -520,7 +610,14 @@ client.on('interactionCreate', async interaction => {
         let isInventory = interaction.message.embeds[0]?.title.includes('Inventario');
 
         if (isInventory) {
-            const pjId = `pj_${interaction.user.id}_${Date.now()}`; // Temporal: usar el último personaje
+            const nombrePj = interaction.message.embeds[0].title.replace('🎒 Inventario de ', '');
+            const personajes = await obtenerTodosPersonajes();
+            const personaje = personajes.find(p => p.nombre.toLowerCase() === nombrePj.toLowerCase());
+            if (!personaje) {
+                console.log(`Personaje no encontrado durante paginación: ${nombrePj}`);
+                return interaction.reply({ content: `No se encontró el héroe **${nombrePj}**.`, ephemeral: true });
+            }
+            const pjId = personaje.id;
             const inventory = await inventariosDB.get(pjId);
             items = inventory ? inventory.items || [] : [];
             const rupias = inventory ? inventory.rupias || 100 : 100;
@@ -528,15 +625,26 @@ client.on('interactionCreate', async interaction => {
                 console.log('Inventario vacío durante paginación.');
                 const embedEmpty = new EmbedBuilder()
                     .setColor(LIST_EMBED_COLOR)
-                    .setTitle('🎒 Inventario del Héroe')
+                    .setTitle(`🎒 Inventario de ${personaje.nombre}`)
                     .setDescription(`*Tu inventario está vacío, pero tienes **${rupias} Rupias**.*`)
                     .setFooter({ text: 'Página 1 de 1 | Total de ítems: 0' });
                 const row = createPaginationRow(0, 1);
                 return interaction.update({ embeds: [embedEmpty], components: [row] });
             }
-            const result = createInventoryEmbedPage(items, currentPage, rupias);
+            let newPage = currentPage;
+            switch (interaction.customId) {
+                case 'first': newPage = 0; break;
+                case 'prev': newPage = Math.max(0, currentPage - 1); break;
+                case 'next': newPage = Math.min(totalPages - 1, currentPage + 1); break;
+                case 'last': newPage = totalPages - 1; break;
+            }
+            const result = createInventoryEmbedPage(items, newPage, rupias);
             embed = result.embed;
+            embed.setTitle(`🎒 Inventario de ${personaje.nombre}`);
             totalPagesNew = result.totalPages;
+            const newRow = createPaginationRow(newPage, totalPagesNew);
+            console.log(`Actualizando paginación: Página ${newPage + 1} de ${totalPagesNew} (Inventario)`);
+            await interaction.update({ embeds: [embed], components: [newRow] });
         } else {
             items = await obtenerTodosItems();
             if (items.length === 0) {
@@ -549,34 +657,20 @@ client.on('interactionCreate', async interaction => {
                 const row = createPaginationRow(0, 1);
                 return interaction.update({ embeds: [embedEmpty], components: [row] });
             }
-            const result = createItemEmbedPage(items, currentPage);
-            embed = result.embed;
-            totalPagesNew = result.totalPages;
-        }
-
-        let newPage = currentPage;
-        switch (interaction.customId) {
-            case 'first': newPage = 0; break;
-            case 'prev': newPage = Math.max(0, currentPage - 1); break;
-            case 'next': newPage = Math.min(totalPages - 1, currentPage + 1); break;
-            case 'last': newPage = totalPages - 1; break;
-        }
-
-        if (isInventory) {
-            const inventory = await inventariosDB.get(`pj_${interaction.user.id}_${Date.now()}`);
-            const rupias = inventory ? inventory.rupias || 100 : 100;
-            const result = createInventoryEmbedPage(items, newPage, rupias);
-            embed = result.embed;
-            totalPagesNew = result.totalPages;
-        } else {
+            let newPage = currentPage;
+            switch (interaction.customId) {
+                case 'first': newPage = 0; break;
+                case 'prev': newPage = Math.max(0, currentPage - 1); break;
+                case 'next': newPage = Math.min(totalPages - 1, currentPage + 1); break;
+                case 'last': newPage = totalPages - 1; break;
+            }
             const result = createItemEmbedPage(items, newPage);
             embed = result.embed;
             totalPagesNew = result.totalPages;
+            const newRow = createPaginationRow(newPage, totalPagesNew);
+            console.log(`Actualizando paginación: Página ${newPage + 1} de ${totalPagesNew} (Compendio)`);
+            await interaction.update({ embeds: [embed], components: [newRow] });
         }
-
-        const newRow = createPaginationRow(newPage, totalPagesNew);
-        console.log(`Actualizando paginación: Página ${newPage + 1} de ${totalPagesNew} (${isInventory ? 'Inventario' : 'Compendio'})`);
-        await interaction.update({ embeds: [embed], components: [newRow] });
     } catch (error) {
         console.error('Error en interactionCreate:', error);
         await interaction.reply({ content: '¡Error al navegar por el Compendio o Inventario! Contacta a un administrador.', ephemeral: true });
