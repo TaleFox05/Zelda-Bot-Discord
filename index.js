@@ -470,7 +470,6 @@ client.on('messageCreate', async message => {
                 descripcion: descripcion,
                 tipo: tipo,
                 valorRupia: valorRupia,
-                disponible: true,
                 imagen: imagenUrl,
                 registradoPor: message.author.tag,
                 fecha: now.toLocaleDateString('es-ES'),
@@ -488,8 +487,7 @@ client.on('messageCreate', async message => {
                     { name: 'ID', value: id, inline: true },
                     { name: 'Descripción', value: descripcion, inline: false },
                     { name: 'Tipo', value: tipo.toUpperCase(), inline: true },
-                    { name: 'Valor (Rupias)', value: tipo === 'moneda' ? valorRupia.toString() : 'N/A', inline: true },
-                    { name: 'Estado', value: 'Disponible', inline: true }
+                    { name: 'Valor (Rupias)', value: tipo === 'moneda' ? valorRupia.toString() : 'N/A', inline: true }
                 )
                 .setThumbnail(imagenUrl || null)
                 .setFooter({ text: `Registrado por: ${message.author.tag} | Hyrule custodia este tesoro.` });
@@ -536,7 +534,6 @@ client.on('messageCreate', async message => {
                     { name: 'ID', value: item.id, inline: true },
                     { name: 'Descripción', value: item.descripcion, inline: false },
                     { name: 'Tipo', value: item.tipo.toUpperCase(), inline: true },
-                    { name: 'Estado', value: item.disponible ? 'Disponible' : 'En Posesión', inline: true },
                     { name: 'Fecha de Registro', value: item.fecha, inline: true }
                 )
                 .setThumbnail(item.imagen || null)
@@ -629,9 +626,9 @@ client.on('messageCreate', async message => {
             console.log(`Buscando ítem con ID: ${idItem} para personaje: ${nombrePj}, cantidad: ${cantidad}`);
             const item = await compendioDB.get(idItem);
 
-            if (!item || !item.disponible) {
-                console.log(`Ítem no encontrado o no disponible: ${idItem}`);
-                return message.reply(`No se encontró un objeto disponible con el ID **${idItem}** en el Compendio de Hyrule.`);
+            if (!item) {
+                console.log(`Ítem no encontrado: ${idItem}`);
+                return message.reply(`No se encontró un objeto con el ID **${idItem}** en el Compendio de Hyrule.`);
             }
 
             const personajes = await obtenerTodosPersonajes();
@@ -656,16 +653,13 @@ client.on('messageCreate', async message => {
                 for (let i = 0; i < cantidad; i++) {
                     inventario.items.push({
                         ...item,
-                        fechaObtencion: now.toLocaleDateString('es-ES'),
-                        disponible: false
+                        fechaObtencion: now.toLocaleDateString('es-ES')
                     });
                 }
                 console.log(`Ítem ${item.nombre} x${cantidad} añadido al inventario de ${pjId}`);
             }
 
             await inventariosDB.set(pjId, inventario);
-            item.disponible = false;
-            await compendioDB.set(item.id, item);
 
             const embed = new EmbedBuilder()
                 .setColor(LIST_EMBED_COLOR)
@@ -725,11 +719,10 @@ client.on('messageCreate', async message => {
                 inventario.rupias = 100; // Resetear Rupias a valor inicial
                 console.log(`Todos los ítems eliminados del inventario de ${pjId}`);
 
-                // Restaurar disponibilidad de ítems en compendio
+                // Restaurar disponibilidad de ítems en compendio (ahora sin estado)
                 for (const item of removedItems) {
                     const compendioItem = items.find(i => i.id === item.id);
                     if (compendioItem) {
-                        compendioItem.disponible = true;
                         await compendioDB.set(compendioItem.id, compendioItem);
                     }
                 }
@@ -743,10 +736,9 @@ client.on('messageCreate', async message => {
                 const removedItem = inventario.items.splice(itemIndex, 1)[0];
                 console.log(`Ítem ${removedItem.nombre} eliminado del inventario de ${pjId}`);
 
-                // Restaurar disponibilidad en compendio
+                // Restaurar ítem en compendio (sin estado)
                 const compendioItem = items.find(i => i.id === removedItem.id);
                 if (compendioItem) {
-                    compendioItem.disponible = true;
                     await compendioDB.set(compendioItem.id, compendioItem);
                 }
             }
