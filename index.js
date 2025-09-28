@@ -614,25 +614,24 @@ client.on('messageCreate', async message => {
             const matches = [...fullCommand.matchAll(regex)];
             const cantidadMatch = fullCommand.match(/\b(\d+)\b/);
 
-            if (matches.length !== 2 || !cantidadMatch) {
-                return message.reply('Uso: `!Zdaritem "Nombre del Objeto" "Nombre del Personaje" cantidad` (ejemplo: `!Zdaritem "Rupia Verde" "Link" 5`)');
+            if (matches.length !== 2) {
+                return message.reply('Uso: `!Zdaritem "ID del Objeto" "Nombre del Personaje" [cantidad]` (ejemplo: `!Zdaritem "item_1" "Link" 5` o `!Zdaritem "item_1" "Link"`)');
             }
 
-            const nombreItem = matches[0][1];
+            const idItem = matches[0][1];
             const nombrePj = matches[1][1];
-            const cantidad = parseInt(cantidadMatch[1]) || 1;
+            const cantidad = cantidadMatch ? parseInt(cantidadMatch[1]) : 1;
 
             if (cantidad <= 0) {
                 return message.reply('La cantidad debe ser un número entero positivo.');
             }
 
-            console.log(`Buscando ítem: ${nombreItem} para personaje: ${nombrePj}, cantidad: ${cantidad}`);
-            const items = await obtenerTodosItems();
-            const item = items.find(i => i.nombre === nombreItem);
+            console.log(`Buscando ítem con ID: ${idItem} para personaje: ${nombrePj}, cantidad: ${cantidad}`);
+            const item = await compendioDB.get(idItem);
 
             if (!item || !item.disponible) {
-                console.log(`Ítem no encontrado o no disponible: ${nombreItem}`);
-                return message.reply(`No se encontró un objeto disponible con el nombre **${nombreItem}** en el Compendio de Hyrule.`);
+                console.log(`Ítem no encontrado o no disponible: ${idItem}`);
+                return message.reply(`No se encontró un objeto disponible con el ID **${idItem}** en el Compendio de Hyrule.`);
             }
 
             const personajes = await obtenerTodosPersonajes();
@@ -982,6 +981,6 @@ client.on('interactionCreate', async interaction => {
         console.error('Error en interactionCreate:', error);
         await interaction.reply({ content: '¡Error al navegar por el Compendio o Inventario! Contacta a un administrador.', ephemeral: true });
     }
-}); 
+});
 
 client.login(process.env.DISCORD_TOKEN);
