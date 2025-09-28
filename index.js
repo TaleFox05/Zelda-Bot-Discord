@@ -674,7 +674,7 @@ client.on('interactionCreate', async interaction => {
     } catch (error) {
         console.error('Error en interactionCreate:', error);
         await interaction.reply({ content: '¡Error al navegar por el Compendio o Inventario! Contacta a un administrador.', ephemeral: true });
-    }
+    } 
 });
 
 client.login(process.env.DISCORD_TOKEN);
