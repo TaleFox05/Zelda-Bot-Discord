@@ -478,21 +478,27 @@ client.on('messageCreate', async message => {
     // --- COMANDO: VER ITEM (Público) ---
     if (command === 'veritem') {
         try {
-            const regex = /"([^"]+)"/;
-            const match = fullCommand.match(regex);
+            const regex = /"([^"]+)"/g;
+            const matches = [...fullCommand.matchAll(regex)];
 
-            if (!match) {
-                return message.reply('Uso: `!Zveritem "ID del Objeto" o "Nombre del Objeto"`');
+            if (matches.length !== 1) {
+                return message.reply('Uso: `!Zveritem "ID del Objeto"` o `!Zveritem "Nombre del Objeto"` (solo un argumento entre comillas).');
             }
 
-            const input = match[1];
+            const input = matches[0][1];
             console.log(`Buscando ítem con input: ${input}`);
-            const items = await obtenerTodosItems();
-            const item = items.find(i => i.nombre === input); // Búsqueda exacta por nombre
+            let item;
+
+            if (input.startsWith('item_')) {
+                item = await compendioDB.get(input); // Búsqueda directa por ID
+            } else {
+                const items = await obtenerTodosItems();
+                item = items.find(i => i.nombre === input); // Búsqueda exacta por nombre
+            }
 
             if (!item) {
-                console.log(`Ítem no encontrado con nombre: ${input}`);
-                return message.reply(`No se encontró ningún objeto con el nombre **${input}** en el Compendio de Hyrule.`);
+                console.log(`Ítem no encontrado con input: ${input}`);
+                return message.reply(`No se encontró ningún objeto con el ID o nombre **${input}** en el Compendio de Hyrule.`);
             }
 
             console.log(`Ítem encontrado: ${item.id} - ${item.nombre}`);
