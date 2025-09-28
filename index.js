@@ -138,6 +138,32 @@ function createItemEmbedPage(items, pageIndex) {
     return { embed, totalPages };
 }
 
+// Función para crear el embed de la lista de personajes
+function createPjEmbedPage(personajes, pageIndex, userTag) {
+    const ITEMS_PER_PAGE = 5;
+    const start = pageIndex * ITEMS_PER_PAGE;
+    const end = start + ITEMS_PER_PAGE;
+    const personajesToShow = personajes.slice(start, end);
+    const totalPages = Math.ceil(personajes.length / ITEMS_PER_PAGE) || 1;
+
+    const embed = new EmbedBuilder()
+        .setColor(LIST_EMBED_COLOR)
+        .setTitle(`🏰 Lista de Héroes de ${userTag} 🏰`)
+        .setDescription(`*Tus héroes registrados en Nuevo Hyrule.*`);
+
+    personajesToShow.forEach(pj => {
+        embed.addFields({
+            name: `**${pj.nombre}**`,
+            value: `**ID:** ${pj.id}\n**Creador:** ${pj.registradoPor}\n**Fecha:** ${pj.fecha}`,
+            inline: false
+        });
+    });
+
+    embed.setFooter({ text: `Página ${pageIndex + 1} de ${totalPages} | Total de héroes: ${personajes.length}` });
+
+    return { embed, totalPages };
+}
+
 // Función para crear el embed del inventario
 function createInventoryEmbedPage(inventoryItems, pageIndex, rupias, personajeNombre, creador) {
     const ITEMS_PER_PAGE = 5;
@@ -552,6 +578,97 @@ client.on('messageCreate', async message => {
         }
     }
 
+    // --- COMANDO: LISTAR PERSONAJES (Público) ---
+    if (command === 'pjs') {
+        try {
+            const personajes = await obtenerTodosPersonajes();
+            const userPersonajes = personajes.filter(p => p.registradoPor === message.author.tag);
+
+            if (userPersonajes.length === 0) {
+                console.log('No hay personajes para el usuario:', message.author.tag);
+                const embed = new EmbedBuilder()
+                    .setColor(LIST_EMBED_COLOR)
+                    .setTitle(`🏰 Lista de Héroes de ${message.author.tag} 🏰`)
+                    .setDescription('***No tienes héroes registrados en Nuevo Hyrule. ¡Registra uno con !Zcrearpj!***')
+                    .setFooter({ text: 'Página 1 de 1 | Total de héroes: 0' });
+                const row = createPaginationRow(0, 1);
+                return message.channel.send({ embeds: [embed], components: [row] });
+            }
+
+            const currentPage = 0;
+            const { embed, totalPages } = createPjEmbedPage(userPersonajes, currentPage, message.author.tag);
+            const row = createPaginationRow(currentPage, totalPages);
+            console.log(`Enviando embed de !Zpjs (Página ${currentPage + 1} de ${totalPages})`);
+
+            await message.channel.send({ embeds: [embed], components: [row] });
+        } catch (error) {
+            console.error('Error en !Zpjs:', error);
+            await message.reply('¡Error al listar tus héroes! Contacta a un administrador.');
+        }
+    }
+
+    // --- COMANDO: DAR ITEM (Pruebas) ---
+    if (command === 'dar') {
+        try {
+            const regex = /"([^"]+)"/;
+            const match = fullCommand.match(regex);
+
+            if (!match) {
+                return message.reply('Uso: `!Zdar "Nombre del Objeto"`');
+            }
+
+            const nombreItem = match[1];
+            console.log(`Buscando ítem para otorgar: ${nombreItem}`);
+            const items = await obtenerTodosItems();
+            const item = items.find(i => i.nombre === nombreItem);
+
+            if (!item || !item.disponible) {
+                console.log(`Ítem no encontrado o no disponible: ${nombreItem}`);
+                return message.reply(`No se encontró un objeto disponible con el nombre **${nombreItem}** en el Compendio de Hyrule.`);
+            }
+
+            const pjId = await obtenerSiguientePjId(message.author.id);
+            const inventario = await inventariosDB.get(pjId) || { pjId, rupias: 100, items: [] };
+            const now = new Date();
+
+            if (item.tipo === 'moneda') {
+                inventario.rupias += item.valorRupia;
+                console.log(`Otorgadas ${item.valorRupia} Rupias a ${pjId}`);
+            } else if (item.tipo === 'objeto' || item.tipo === 'keyitem') {
+                if (inventario.items.length >= 25) {
+                    return message.reply('Tu inventario está lleno (máximo 25 objetos).');
+                }
+                inventario.items.push({
+                    ...item,
+                    fechaObtencion: now.toLocaleDateString('es-ES'),
+                    disponible: false
+                });
+                console.log(`Ítem ${item.nombre} añadido al inventario de ${pjId}`);
+            }
+
+            await inventariosDB.set(pjId, inventario);
+            item.disponible = false;
+            await compendioDB.set(item.id, item);
+
+            const embed = new EmbedBuilder()
+                .setColor(LIST_EMBED_COLOR)
+                .setTitle(`🎁 Ítem Otorgado: ${item.nombre}`)
+                .setDescription(`¡Has recibido un tesoro en Nuevo Hyrule!`)
+                .addFields(
+                    { name: 'ID', value: item.id, inline: true },
+                    { name: 'Tipo', value: item.tipo.toUpperCase(), inline: true },
+                    { name: 'Descripción', value: item.descripcion, inline: false }
+                )
+                .setThumbnail(item.imagen || null)
+                .setFooter({ text: `Otorgado a: ${message.author.tag} | ${now.toLocaleString('es-ES')}` });
+
+            await message.channel.send({ embeds: [embed] });
+        } catch (error) {
+            console.error('Error en !Zdar:', error);
+            await message.reply('¡Error al otorgar el ítem! Contacta a un administrador.');
+        }
+    }
+
     // --- COMANDO: ELIMINAR ITEM (Staff) ---
     if (command === 'eliminaritem') {
         if (!hasAdminPerms) {
@@ -627,6 +744,7 @@ client.on('interactionCreate', async interaction => {
         const totalPages = parseInt(match[2]);
         let items, embed, totalPagesNew;
         let isInventory = interaction.message.embeds[0]?.title.includes('Inventario');
+        let isPjList = interaction.message.embeds[0]?.title.includes('Lista de Héroes');
 
         if (isInventory) {
             const nombrePj = interaction.message.embeds[0].title.replace('🎒 Inventario de ', '');
@@ -658,6 +776,23 @@ client.on('interactionCreate', async interaction => {
             }
             console.log(`Actualizando paginación: Página ${newPage + 1} de ${totalPagesNew} (Inventario)`);
             await interaction.update({ embeds: [embed], components: components });
+        } else if (isPjList) {
+            const userTag = interaction.message.embeds[0].title.replace('🏰 Lista de Héroes de ', '').replace(' 🏰', '');
+            const personajes = await obtenerTodosPersonajes();
+            const userPersonajes = personajes.filter(p => p.registradoPor === userTag);
+            let newPage = currentPage;
+            switch (interaction.customId) {
+                case 'first': newPage = 0; break;
+                case 'prev': newPage = Math.max(0, currentPage - 1); break;
+                case 'next': newPage = Math.min(totalPages - 1, currentPage + 1); break;
+                case 'last': newPage = totalPages - 1; break;
+            }
+            const result = createPjEmbedPage(userPersonajes, newPage, userTag);
+            embed = result.embed;
+            totalPagesNew = result.totalPages;
+            const newRow = createPaginationRow(newPage, totalPagesNew);
+            console.log(`Actualizando paginación: Página ${newPage + 1} de ${totalPagesNew} (Personajes)`);
+            await interaction.update({ embeds: [embed], components: [newRow] });
         } else {
             items = await obtenerTodosItems();
             if (items.length === 0) {
