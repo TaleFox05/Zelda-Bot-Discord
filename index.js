@@ -10,11 +10,15 @@ const LIST_EMBED_COLOR = '#427522';
 const DELETE_EMBED_COLOR = '#D11919';
 const TIPOS_VALIDOS = ['moneda', 'objeto', 'keyitem'];
 
-// Base de datos
+// Bases de datos
 const compendioDB = new Keyv(process.env.REDIS_URL, { namespace: 'items' });
+const personajesDB = new Keyv(process.env.REDIS_URL, { namespace: 'personajes' });
+const inventariosDB = new Keyv(process.env.REDIS_URL, { namespace: 'inventarios' });
 
 // Manejo de errores en Redis
-compendioDB.on('error', err => console.error('Error en Redis:', err));
+compendioDB.on('error', err => console.error('Error en Redis (items):', err));
+personajesDB.on('error', err => console.error('Error en Redis (personajes):', err));
+inventariosDB.on('error', err => console.error('Error en Redis (inventarios):', err));
 
 // Cliente de Discord
 const client = new Client({
@@ -32,10 +36,10 @@ client.removeAllListeners('ready');
 client.removeAllListeners('interactionCreate');
 
 // Función para verificar conexión a Redis
-async function verificarRedis() {
+async function verificarRedis(db) {
     try {
-        await compendioDB.set('test', 'test');
-        await compendioDB.delete('test');
+        await db.set('test', 'test');
+        await db.delete('test');
         console.log('Conexión a Redis verificada.');
         return true;
     } catch (error) {
@@ -50,11 +54,11 @@ function isValidImageUrl(url) {
     return url.match(/\.(jpeg|jpg|png|gif|bmp|webp)$/i) !== null;
 }
 
-// Función para obtener todos los ítems (ordenados por ID numérico)
+// Función para obtener todos los ítems del compendio
 async function obtenerTodosItems() {
     try {
-        if (!(await verificarRedis())) {
-            throw new Error('No se pudo conectar con Redis.');
+        if (!(await verificarRedis(compendioDB))) {
+            throw new Error('No se pudo conectar con Redis (items).');
         }
         const items = {};
         for await (const [key, value] of compendioDB.iterator()) {
@@ -82,7 +86,7 @@ function createItemEmbedPage(items, pageIndex) {
     const start = pageIndex * ITEMS_PER_PAGE;
     const end = start + ITEMS_PER_PAGE;
     const itemsToShow = items.slice(start, end);
-    const totalPages = Math.ceil(items.length / ITEMS_PER_PAGE) || 1; // Asegurar al menos 1 página
+    const totalPages = Math.ceil(items.length / ITEMS_PER_PAGE) || 1;
 
     const embed = new EmbedBuilder()
         .setColor(LIST_EMBED_COLOR)
@@ -98,6 +102,32 @@ function createItemEmbedPage(items, pageIndex) {
     });
 
     embed.setFooter({ text: `Página ${pageIndex + 1} de ${totalPages} | Total de ítems: ${items.length}` });
+
+    return { embed, totalPages };
+}
+
+// Función para crear el embed del inventario
+function createInventoryEmbedPage(inventoryItems, pageIndex, rupias) {
+    const ITEMS_PER_PAGE = 5;
+    const start = pageIndex * ITEMS_PER_PAGE;
+    const end = start + ITEMS_PER_PAGE;
+    const itemsToShow = inventoryItems.slice(start, end);
+    const totalPages = Math.ceil(inventoryItems.length / ITEMS_PER_PAGE) || 1;
+
+    const embed = new EmbedBuilder()
+        .setColor(LIST_EMBED_COLOR)
+        .setTitle('🎒 Inventario del Héroe')
+        .setDescription(`*Tus tesoros en Nuevo Hyrule.*\n**Rupias:** ${rupias}`);
+
+    itemsToShow.forEach(item => {
+        embed.addFields({
+            name: `**${item.nombre}**`,
+            value: `**ID:** ${item.id}\n**Descripción:** ${item.descripcion}\n**Fecha de Obtención:** ${item.fechaObtencion}`,
+            inline: false
+        });
+    });
+
+    embed.setFooter({ text: `Página ${pageIndex + 1} de ${totalPages} | Total de ítems: ${inventoryItems.length}` });
 
     return { embed, totalPages };
 }
@@ -132,7 +162,9 @@ function createPaginationRow(currentPage, totalPages) {
 client.on('ready', async () => {
     console.log(`¡Zelda BOT iniciado como ${client.user.tag}!`);
     client.user.setActivity('Gestionando el Compendio de Hyrule');
-    await verificarRedis();
+    await verificarRedis(compendioDB);
+    await verificarRedis(personajesDB);
+    await verificarRedis(inventariosDB);
 });
 
 // Evento: Manejo de comandos
@@ -155,6 +187,105 @@ client.on('messageCreate', async message => {
     const args = fullCommand.split(/ +/);
     const command = args.shift().toLowerCase();
     console.log(`Comando detectado: ${command} (Autor: ${message.author.tag})`);
+
+    // --- COMANDO: CREAR PERSONAJE (Staff) ---
+    if (command === 'crearpj') {
+        if (!hasAdminPerms) {
+            console.log('Usuario sin permisos intentó usar !Zcrearpj:', message.author.tag);
+            return message.reply('¡Alto ahí! Solo los **Administradores Canon** pueden registrar nuevos héroes.');
+        }
+
+        try {
+            const regex = /"([^"]+)"/g;
+            const matches = [...message.content.matchAll(regex)];
+
+            if (matches.length < 2) {
+                return message.reply('Sintaxis incorrecta. Uso: `!Zcrearpj "Nombre" "Descripción"`');
+            }
+
+            const nombre = matches[0][1];
+            const descripcion = matches[1][1];
+            const pjId = `pj_${message.author.id}_${Date.now()}`; // ID único basado en usuario y timestamp
+
+            const existingPj = await personajesDB.get(pjId);
+            if (existingPj) {
+                return message.reply('¡El héroe con ID **${pjId}** ya está registrado! Contacta a un administrador.');
+            }
+
+            const now = new Date();
+            const newPj = {
+                id: pjId,
+                nombre: nombre,
+                descripcion: descripcion,
+                registradoPor: message.author.tag,
+                fecha: now.toLocaleDateString('es-ES'),
+                fechaCreacionMs: now.getTime()
+            };
+
+            const newInventory = {
+                pjId: pjId,
+                rupias: 100,
+                items: []
+            };
+
+            await personajesDB.set(pjId, newPj);
+            await inventariosDB.set(pjId, newInventory);
+            console.log(`Personaje creado: ${pjId} - ${nombre}`);
+
+            const embed = new EmbedBuilder()
+                .setColor(LIST_EMBED_COLOR)
+                .setTitle(`🗡️ Héroe Registrado: ${nombre}`)
+                .setDescription(`¡Un nuevo héroe ha llegado a Nuevo Hyrule!`)
+                .addFields(
+                    { name: 'ID', value: pjId, inline: true },
+                    { name: 'Descripción', value: descripcion, inline: false },
+                    { name: 'Rupias Iniciales', value: '100', inline: true }
+                )
+                .setFooter({ text: `Registrado por: ${message.author.tag} | Las Diosas dan la bienvenida.` });
+
+            await message.channel.send({ embeds: [embed] });
+        } catch (error) {
+            console.error('Error en !Zcrearpj:', error);
+            await message.reply('¡Error al registrar el héroe en Nuevo Hyrule! Contacta a un administrador.');
+        }
+    }
+
+    // --- COMANDO: INVENTARIO (Público) ---
+    if (command === 'inventario') {
+        try {
+            const pjId = `pj_${message.author.id}_${Date.now()}`; // Temporal: usar el último personaje creado por el usuario
+            console.log(`Buscando inventario para pjId: ${pjId}`);
+            const inventory = await inventariosDB.get(pjId);
+
+            if (!inventory) {
+                console.log(`Inventario no encontrado para pjId: ${pjId}`);
+                return message.reply('No tienes un héroe registrado. Usa `!Zcrearpj` para crear uno.');
+            }
+
+            const items = inventory.items || [];
+            const rupias = inventory.rupias || 100;
+
+            if (items.length === 0) {
+                const embed = new EmbedBuilder()
+                    .setColor(LIST_EMBED_COLOR)
+                    .setTitle('🎒 Inventario del Héroe')
+                    .setDescription(`*Tu inventario está vacío, pero tienes **${rupias} Rupias**.*`)
+                    .setFooter({ text: 'Página 1 de 1 | Total de ítems: 0' });
+                const row = createPaginationRow(0, 1);
+                return message.channel.send({ embeds: [embed], components: [row] });
+            }
+
+            const currentPage = 0;
+            const { embed, totalPages } = createInventoryEmbedPage(items, currentPage, rupias);
+            const row = createPaginationRow(currentPage, totalPages);
+            console.log(`Enviando embed de !Zinventario (Página ${currentPage + 1} de ${totalPages})`);
+
+            await message.channel.send({ embeds: [embed], components: [row] });
+        } catch (error) {
+            console.error('Error en !Zinventario:', error);
+            await message.reply('¡Error al consultar el inventario! Contacta a un administrador.');
+        }
+    }
 
     // --- COMANDO: CREAR ITEM (Staff) ---
     if (command === 'crearitem') {
@@ -385,17 +516,42 @@ client.on('interactionCreate', async interaction => {
 
         const currentPage = parseInt(match[1]) - 1;
         const totalPages = parseInt(match[2]);
-        const items = await obtenerTodosItems();
+        let items, embed, totalPagesNew;
+        let isInventory = interaction.message.embeds[0]?.title.includes('Inventario');
 
-        if (items.length === 0) {
-            console.log('Compendio vacío durante paginación.');
-            const embed = new EmbedBuilder()
-                .setColor(LIST_EMBED_COLOR)
-                .setTitle('🏰 Compendio de Objetos de Nuevo Hyrule 🏰')
-                .setDescription('***El Compendio de Hyrule está vacío. ¡Que las Diosas traigan el primer tesoro!***')
-                .setFooter({ text: 'Página 1 de 1 | Total de ítems: 0' });
-            const row = createPaginationRow(0, 1);
-            return interaction.update({ embeds: [embed], components: [row] });
+        if (isInventory) {
+            const pjId = `pj_${interaction.user.id}_${Date.now()}`; // Temporal: usar el último personaje
+            const inventory = await inventariosDB.get(pjId);
+            items = inventory ? inventory.items || [] : [];
+            const rupias = inventory ? inventory.rupias || 100 : 100;
+            if (items.length === 0) {
+                console.log('Inventario vacío durante paginación.');
+                const embedEmpty = new EmbedBuilder()
+                    .setColor(LIST_EMBED_COLOR)
+                    .setTitle('🎒 Inventario del Héroe')
+                    .setDescription(`*Tu inventario está vacío, pero tienes **${rupias} Rupias**.*`)
+                    .setFooter({ text: 'Página 1 de 1 | Total de ítems: 0' });
+                const row = createPaginationRow(0, 1);
+                return interaction.update({ embeds: [embedEmpty], components: [row] });
+            }
+            const result = createInventoryEmbedPage(items, currentPage, rupias);
+            embed = result.embed;
+            totalPagesNew = result.totalPages;
+        } else {
+            items = await obtenerTodosItems();
+            if (items.length === 0) {
+                console.log('Compendio vacío durante paginación.');
+                const embedEmpty = new EmbedBuilder()
+                    .setColor(LIST_EMBED_COLOR)
+                    .setTitle('🏰 Compendio de Objetos de Nuevo Hyrule 🏰')
+                    .setDescription('***El Compendio de Hyrule está vacío. ¡Que las Diosas traigan el primer tesoro!***')
+                    .setFooter({ text: 'Página 1 de 1 | Total de ítems: 0' });
+                const row = createPaginationRow(0, 1);
+                return interaction.update({ embeds: [embedEmpty], components: [row] });
+            }
+            const result = createItemEmbedPage(items, currentPage);
+            embed = result.embed;
+            totalPagesNew = result.totalPages;
         }
 
         let newPage = currentPage;
@@ -406,13 +562,24 @@ client.on('interactionCreate', async interaction => {
             case 'last': newPage = totalPages - 1; break;
         }
 
-        const { embed: newEmbed, totalPages: newTotalPages } = createItemEmbedPage(items, newPage);
-        const newRow = createPaginationRow(newPage, newTotalPages);
-        console.log(`Actualizando paginación: Página ${newPage + 1} de ${newTotalPages}`);
-        await interaction.update({ embeds: [newEmbed], components: [newRow] });
+        if (isInventory) {
+            const inventory = await inventariosDB.get(`pj_${interaction.user.id}_${Date.now()}`);
+            const rupias = inventory ? inventory.rupias || 100 : 100;
+            const result = createInventoryEmbedPage(items, newPage, rupias);
+            embed = result.embed;
+            totalPagesNew = result.totalPages;
+        } else {
+            const result = createItemEmbedPage(items, newPage);
+            embed = result.embed;
+            totalPagesNew = result.totalPages;
+        }
+
+        const newRow = createPaginationRow(newPage, totalPagesNew);
+        console.log(`Actualizando paginación: Página ${newPage + 1} de ${totalPagesNew} (${isInventory ? 'Inventario' : 'Compendio'})`);
+        await interaction.update({ embeds: [embed], components: [newRow] });
     } catch (error) {
         console.error('Error en interactionCreate:', error);
-        await interaction.reply({ content: '¡Error al navegar por el Compendio de Hyrule! Contacta a un administrador.', ephemeral: true });
+        await interaction.reply({ content: '¡Error al navegar por el Compendio o Inventario! Contacta a un administrador.', ephemeral: true });
     }
 });
 
