@@ -129,7 +129,7 @@ function createItemEmbedPage(items, pageIndex) {
 }
 
 // Función para crear el embed del inventario
-function createInventoryEmbedPage(inventoryItems, pageIndex, rupias) {
+function createInventoryEmbedPage(inventoryItems, pageIndex, rupias, personajeNombre) {
     const ITEMS_PER_PAGE = 5;
     const start = pageIndex * ITEMS_PER_PAGE;
     const end = start + ITEMS_PER_PAGE;
@@ -138,8 +138,9 @@ function createInventoryEmbedPage(inventoryItems, pageIndex, rupias) {
 
     const embed = new EmbedBuilder()
         .setColor(LIST_EMBED_COLOR)
-        .setTitle('🎒 Inventario del Héroe')
-        .setDescription(`*Tus tesoros en Nuevo Hyrule.*\n**Rupias:** ${rupias}`);
+        .setTitle(`🎒 Inventario de ${personajeNombre}`)
+        .setDescription(`*Tus tesoros en Nuevo Hyrule.*\n**Rupias:** ${rupias}\n**Objetos (${inventoryItems.length}/25)**`)
+        .setThumbnail(inventoryItems.length > 0 ? inventoryItems[0].imagen : null);
 
     itemsToShow.forEach(item => {
         embed.addFields({
@@ -149,7 +150,7 @@ function createInventoryEmbedPage(inventoryItems, pageIndex, rupias) {
         });
     });
 
-    embed.setFooter({ text: `Página ${pageIndex + 1} de ${totalPages} | Total de ítems: ${inventoryItems.length}` });
+    embed.setFooter({ text: `Página ${pageIndex + 1} de ${totalPages}` });
 
     return { embed, totalPages };
 }
@@ -222,13 +223,13 @@ client.on('messageCreate', async message => {
             const matches = [...message.content.matchAll(regex)];
 
             if (matches.length < 2) {
-                return message.reply('Sintaxis incorrecta. Uso: `!Zcrearpj "Nombre" "Raza"`');
+                return message.reply('Sintaxis incorrecta. Uso: `!Zcrearpj "Nombre" "URL de la Imagen"`');
             }
 
             const nombre = matches[0][1];
-            const raza = matches[1][1];
-            if (!RAZAS_VALIDAS.includes(raza)) {
-                return message.reply(`La raza debe ser una de: ${RAZAS_VALIDAS.join(', ')}.`);
+            const imagenUrl = matches[1][1];
+            if (!isValidImageUrl(imagenUrl)) {
+                return message.reply('La URL de la imagen no es válida. Usa una URL que termine en .jpg, .png, .gif, .bmp o .webp.');
             }
 
             const personajes = await obtenerTodosPersonajes();
@@ -241,7 +242,7 @@ client.on('messageCreate', async message => {
             const newPj = {
                 id: pjId,
                 nombre: nombre,
-                raza: raza,
+                imagen: imagenUrl,
                 registradoPor: message.author.tag,
                 fecha: now.toLocaleDateString('es-ES'),
                 fechaCreacionMs: now.getTime()
@@ -263,9 +264,9 @@ client.on('messageCreate', async message => {
                 .setDescription(`¡Un nuevo héroe ha llegado a Nuevo Hyrule!`)
                 .addFields(
                     { name: 'ID', value: pjId, inline: true },
-                    { name: 'Raza', value: raza, inline: true },
                     { name: 'Rupias Iniciales', value: '100', inline: true }
                 )
+                .setThumbnail(imagenUrl)
                 .setFooter({ text: `Registrado por: ${message.author.tag} | Las Diosas dan la bienvenida.` });
 
             await message.channel.send({ embeds: [embed] });
@@ -311,15 +312,16 @@ client.on('messageCreate', async message => {
                 const embed = new EmbedBuilder()
                     .setColor(LIST_EMBED_COLOR)
                     .setTitle(`🎒 Inventario de ${personaje.nombre}`)
-                    .setDescription(`*Tu inventario está vacío, pero tienes **${rupias} Rupias**.*`)
-                    .setFooter({ text: 'Página 1 de 1 | Total de ítems: 0' });
+                    .setDescription(`*Tu inventario está vacío, pero tienes **${rupias} Rupias**.*\n**Objetos (${items.length}/25)**`)
+                    .setThumbnail(personaje.imagen)
+                    .setFooter({ text: 'Página 1 de 1' });
                 const row = createPaginationRow(0, 1);
                 return message.channel.send({ embeds: [embed], components: [row] });
             }
 
             const currentPage = 0;
-            const { embed, totalPages } = createInventoryEmbedPage(items, currentPage, rupias);
-            embed.setTitle(`🎒 Inventario de ${personaje.nombre}`);
+            const { embed, totalPages } = createInventoryEmbedPage(items, currentPage, rupias, personaje.nombre);
+            embed.setThumbnail(personaje.imagen);
             const row = createPaginationRow(currentPage, totalPages);
             console.log(`Enviando embed de !Zinventario (Página ${currentPage + 1} de ${totalPages})`);
 
@@ -365,8 +367,7 @@ client.on('messageCreate', async message => {
                 .setTitle(`🗑️ Héroe Eliminado: ${personaje.nombre}`)
                 .setDescription(`¡El héroe ha abandonado Nuevo Hyrule!`)
                 .addFields(
-                    { name: 'ID', value: pjId, inline: true },
-                    { name: 'Raza', value: personaje.raza, inline: true }
+                    { name: 'ID', value: pjId, inline: true }
                 )
                 .setFooter({ text: `Eliminado por: ${message.author.tag} | Las Diosas han hablado.` });
 
@@ -626,8 +627,9 @@ client.on('interactionCreate', async interaction => {
                 const embedEmpty = new EmbedBuilder()
                     .setColor(LIST_EMBED_COLOR)
                     .setTitle(`🎒 Inventario de ${personaje.nombre}`)
-                    .setDescription(`*Tu inventario está vacío, pero tienes **${rupias} Rupias**.*`)
-                    .setFooter({ text: 'Página 1 de 1 | Total de ítems: 0' });
+                    .setDescription(`*Tu inventario está vacío, pero tienes **${rupias} Rupias**.*\n**Objetos (${items.length}/25)**`)
+                    .setThumbnail(personaje.imagen)
+                    .setFooter({ text: 'Página 1 de 1' });
                 const row = createPaginationRow(0, 1);
                 return interaction.update({ embeds: [embedEmpty], components: [row] });
             }
@@ -638,9 +640,9 @@ client.on('interactionCreate', async interaction => {
                 case 'next': newPage = Math.min(totalPages - 1, currentPage + 1); break;
                 case 'last': newPage = totalPages - 1; break;
             }
-            const result = createInventoryEmbedPage(items, newPage, rupias);
+            const result = createInventoryEmbedPage(items, newPage, rupias, personaje.nombre);
             embed = result.embed;
-            embed.setTitle(`🎒 Inventario de ${personaje.nombre}`);
+            embed.setThumbnail(personaje.imagen);
             totalPagesNew = result.totalPages;
             const newRow = createPaginationRow(newPage, totalPagesNew);
             console.log(`Actualizando paginación: Página ${newPage + 1} de ${totalPagesNew} (Inventario)`);
@@ -674,7 +676,7 @@ client.on('interactionCreate', async interaction => {
     } catch (error) {
         console.error('Error en interactionCreate:', error);
         await interaction.reply({ content: '¡Error al navegar por el Compendio o Inventario! Contacta a un administrador.', ephemeral: true });
-    } 
+    }
 });
 
 client.login(process.env.DISCORD_TOKEN);
