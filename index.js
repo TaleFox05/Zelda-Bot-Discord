@@ -771,6 +771,63 @@ client.on('messageCreate', async message => {
         }
     }
 
+    // --- COMANDO: QUITAR RUPIAS (Pruebas) ---
+    if (command === 'quitarrupias') {
+        try {
+            const cantidadMatch = fullCommand.match(/^(\d+)/);
+            const regex = /"([^"]+)"/;
+            const match = fullCommand.match(regex);
+
+            if (!cantidadMatch || !match) {
+                return message.reply('Uso: `!Zquitarrupias cantidad "Nombre del Personaje"` (ejemplo: `!Zquitarrupias 5 "Link"`)');
+            }
+
+            const cantidad = parseInt(cantidadMatch[1]);
+            const nombrePj = match[1];
+
+            if (cantidad <= 0) {
+                return message.reply('La cantidad debe ser un número entero positivo.');
+            }
+
+            console.log(`Buscando personaje: ${nombrePj} para quitar ${cantidad} Rupias`);
+            const personajes = await obtenerTodosPersonajes();
+            const personaje = personajes.find(p => p.nombre.toLowerCase() === nombrePj.toLowerCase());
+
+            if (!personaje) {
+                console.log(`Personaje no encontrado: ${nombrePj}`);
+                return message.reply(`No se encontró ningún héroe con el nombre **${nombrePj}**.`);
+            }
+
+            const pjId = personaje.id;
+            const inventario = await inventariosDB.get(pjId) || { pjId, rupias: 100, items: [] };
+
+            if (inventario.rupias < cantidad) {
+                inventario.rupias = 0;
+                console.log(`Rupias insuficientes, ajustadas a 0 para ${pjId}`);
+            } else {
+                inventario.rupias -= cantidad;
+                console.log(`${cantidad} Rupias quitadas a ${pjId}`);
+            }
+
+            await inventariosDB.set(pjId, inventario);
+
+            const embed = new EmbedBuilder()
+                .setColor(DELETE_EMBED_COLOR)
+                .setTitle(`💰 Rupias Quitadas de ${personaje.nombre}`)
+                .setDescription(`¡Se han retirado ${cantidad} Rupias del inventario de ${personaje.nombre}!`)
+                .addFields(
+                    { name: 'Rupias restantes', value: inventario.rupias.toString(), inline: true }
+                )
+                .setThumbnail(personaje.imagen || null)
+                .setFooter({ text: `Quitado por: ${message.author.tag} | ${new Date().toLocaleString('es-ES')}` });
+
+            await message.channel.send({ embeds: [embed] });
+        } catch (error) {
+            console.error('Error en !Zquitarrupias:', error);
+            await message.reply('¡Error al quitar Rupias! Contacta a un administrador.');
+        }
+    }
+
     // --- COMANDO: ELIMINAR ITEM (Staff) ---
     if (command === 'eliminaritem') {
         if (!hasAdminPerms) {
