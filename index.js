@@ -1,6 +1,6 @@
 // Carga la librería 'dotenv' para leer el archivo .env
 require('dotenv').config();
-const { Client, GatewayIntentBits, PermissionsBitField, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, Attachment } = require('discord.js');
+const { Client, GatewayIntentBits, PermissionsBitField, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const Keyv = require('keyv');
 
 // Configuración
@@ -14,7 +14,7 @@ const TIPOS_VALIDOS = ['moneda', 'objeto', 'keyitem'];
 const compendioDB = new Keyv(process.env.REDIS_URL, { namespace: 'items' });
 const personajesDB = new Keyv(process.env.REDIS_URL, { namespace: 'personajes' });
 const inventariosDB = new Keyv(process.env.REDIS_URL, { namespace: 'inventarios' });
-const contadorDB = new Keyv(process.env.REDIS_URL, { namespace: 'contadores' }); // Para IDs únicos
+const contadorDB = new Keyv(process.env.REDIS_URL, { namespace: 'contadores' });
 
 // Manejo de errores en Redis
 compendioDB.on('error', err => console.error('Error en Redis (items):', err));
@@ -28,8 +28,7 @@ const client = new Client({
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMessageReactions,
-        GatewayIntentBits.MessageAttachments
+        GatewayIntentBits.GuildMessageReactions
     ]
 });
 
@@ -55,15 +54,6 @@ async function verificarRedis(db) {
 function isValidImageUrl(url) {
     if (!url) return false;
     return url.match(/\.(jpeg|jpg|png|gif|bmp|webp)$/i) !== null;
-}
-
-// Función para obtener un ID único para personajes
-async function getUniquePjId(userId) {
-    let counter = await contadorDB.get(`pj_${userId}`);
-    if (!counter) counter = 0;
-    counter++;
-    await contadorDB.set(`pj_${userId}`, counter);
-    return `pj_${userId}_${counter}`;
 }
 
 // Función para obtener todos los ítems del compendio
@@ -113,6 +103,15 @@ async function obtenerTodosPersonajes() {
     }
 }
 
+// Función para obtener el siguiente ID de personaje
+async function obtenerSiguientePjId(userId) {
+    let contador = await contadorDB.get(`pj_${userId}`);
+    if (!contador) contador = 0;
+    contador++;
+    await contadorDB.set(`pj_${userId}`, contador);
+    return `pj_${userId}_${contador}`;
+}
+
 // Función para crear el embed de la lista de ítems
 function createItemEmbedPage(items, pageIndex) {
     const ITEMS_PER_PAGE = 5;
@@ -149,22 +148,26 @@ function createInventoryEmbedPage(inventoryItems, pageIndex, rupias, personajeNo
 
     const embed = new EmbedBuilder()
         .setColor(LIST_EMBED_COLOR)
-        .setTitle(`🎒 Inventario de ${personajeNombre}`);
+        .setTitle(`🎒 Inventario de ${personajeNombre}`)
+        .setDescription(`**Creador:** ${creador}\n**Rupias:** ${rupias}\n**Objetos (${inventoryItems.length}/25)**`);
 
-    let description = `*Creado por: ${creador}*\n**Rupias: ${rupias}**\n**Objetos (${inventoryItems.length}/25)**`;
-    if (inventoryItems.length === 0) {
-        description += '\n*Inventario vacío.*';
+    if (itemsToShow.length === 0) {
+        embed.addFields({
+            name: '\u200B',
+            value: '*Inventario vacío.*',
+            inline: false
+        });
     } else {
         itemsToShow.forEach(item => {
             embed.addFields({
                 name: `**${item.nombre}**`,
-                value: `**ID:** ${item.id}\n**Descripción:** ${item.descripcion}\n**Fecha de Obtención:** ${item.fechaObtencion || 'N/A'}`,
+                value: `**ID:** ${item.id}\n**Descripción:** ${item.descripcion}\n**Fecha de Obtención:** ${item.fechaObtencion}`,
                 inline: false
             });
         });
     }
 
-    embed.setDescription(description);
+    embed.setFooter({ text: `Página ${pageIndex + 1} de ${totalPages}` });
 
     return { embed, totalPages };
 }
@@ -236,18 +239,15 @@ client.on('messageCreate', async message => {
         try {
             const regex = /"([^"]+)"/g;
             const matches = [...message.content.matchAll(regex)];
-            let imagenUrl = null;
 
-            if (matches.length < 1) {
-                return message.reply('Sintaxis incorrecta. Uso: `!Zcrearpj "Nombre" [URL de la Imagen]` o adjunta una imagen.');
+            if (matches.length < 2) {
+                return message.reply('Sintaxis incorrecta. Uso: `!Zcrearpj "Nombre" "URL de la Imagen"`');
             }
 
             const nombre = matches[0][1];
-            if (matches.length > 1) {
-                imagenUrl = matches[1][1];
-                if (!isValidImageUrl(imagenUrl) && imagenUrl) {
-                    return message.reply('La URL de la imagen no es válida. Usa una URL que termine en .jpg, .png, .gif, .bmp o .webp.');
-                }
+            const imagenUrl = matches[1][1];
+            if (!isValidImageUrl(imagenUrl)) {
+                return message.reply('La URL de la imagen no es válida. Usa una URL que termine en .jpg, .png, .gif, .bmp o .webp.');
             }
 
             const personajes = await obtenerTodosPersonajes();
@@ -255,25 +255,12 @@ client.on('messageCreate', async message => {
                 return message.reply(`¡El héroe **${nombre}** ya está registrado! Usa un nombre diferente.`);
             }
 
-            const pjId = await getUniquePjId(message.author.id);
+            const pjId = await obtenerSiguientePjId(message.author.id);
             const now = new Date();
-            let imagen = imagenUrl;
-
-            if (message.attachments.size > 0) {
-                const attachment = message.attachments.first();
-                if (isValidImageUrl(attachment.url)) {
-                    imagen = attachment.url;
-                } else {
-                    return message.reply('La imagen adjuntada no es válida. Usa un formato .jpg, .png, .gif, .bmp o .webp.');
-                }
-            } else if (!imagen) {
-                return message.reply('Debes proporcionar una URL de imagen o adjuntar una imagen.');
-            }
-
             const newPj = {
                 id: pjId,
                 nombre: nombre,
-                imagen: imagen,
+                imagen: imagenUrl,
                 registradoPor: message.author.tag,
                 fecha: now.toLocaleDateString('es-ES'),
                 fechaCreacionMs: now.getTime()
@@ -297,7 +284,7 @@ client.on('messageCreate', async message => {
                     { name: 'ID', value: pjId, inline: true },
                     { name: 'Rupias Iniciales', value: '100', inline: true }
                 )
-                .setThumbnail(imagen)
+                .setThumbnail(imagenUrl)
                 .setFooter({ text: `Registrado por: ${message.author.tag} | Las Diosas dan la bienvenida.` });
 
             await message.channel.send({ embeds: [embed] });
@@ -338,7 +325,6 @@ client.on('messageCreate', async message => {
 
             const items = inventory.items || [];
             const rupias = inventory.rupias || 100;
-
             const currentPage = 0;
             const { embed, totalPages } = createInventoryEmbedPage(items, currentPage, rupias, personaje.nombre, personaje.registradoPor);
             embed.setThumbnail(personaje.imagen);
@@ -350,7 +336,7 @@ client.on('messageCreate', async message => {
             }
 
             console.log(`Enviando embed de !Z${command} (Página ${currentPage + 1} de ${totalPages})`);
-            await message.channel.send({ embeds: [embed], components: components.length > 0 ? components : [] });
+            await message.channel.send({ embeds: [embed], components: components });
         } catch (error) {
             console.error('Error en !Zinventario/!Zinv:', error);
             await message.reply('¡Error al consultar el inventario! Contacta a un administrador.');
@@ -496,20 +482,17 @@ client.on('messageCreate', async message => {
             const match = fullCommand.match(regex);
 
             if (!match) {
-                return message.reply('Uso: `!Zveritem "Nombre o ID del Objeto"` (Ejemplo: `!Zveritem "Rupia Verde"` o `!Zveritem "item_22"`)');
+                return message.reply('Uso: `!Zveritem "ID del Objeto" o "Nombre del Objeto"`');
             }
 
             const input = match[1];
             console.log(`Buscando ítem con input: ${input}`);
-            let item = await compendioDB.get(input); // Primero intentar por ID
+            const items = await obtenerTodosItems();
+            const item = items.find(i => i.nombre === input); // Búsqueda exacta por nombre
 
             if (!item) {
-                const items = await obtenerTodosItems();
-                item = items.find(i => i.nombre === input); // Buscar por nombre exacto
-                if (!item) {
-                    console.log(`Ítem no encontrado: ${input}`);
-                    return message.reply(`No se encontró ningún objeto con nombre o ID **${input}** en el Compendio de Hyrule.`);
-                }
+                console.log(`Ítem no encontrado con nombre: ${input}`);
+                return message.reply(`No se encontró ningún objeto con el nombre **${input}** en el Compendio de Hyrule.`);
             }
 
             console.log(`Ítem encontrado: ${item.id} - ${item.nombre}`);
@@ -664,11 +647,11 @@ client.on('interactionCreate', async interaction => {
             totalPagesNew = result.totalPages;
             let components = [];
             if (items.length > 5) {
-                const newRow = createPaginationRow(newPage, totalPagesNew);
-                components.push(newRow);
+                const row = createPaginationRow(newPage, totalPagesNew);
+                components.push(row);
             }
             console.log(`Actualizando paginación: Página ${newPage + 1} de ${totalPagesNew} (Inventario)`);
-            await interaction.update({ embeds: [embed], components: components.length > 0 ? components : [] });
+            await interaction.update({ embeds: [embed], components: components });
         } else {
             items = await obtenerTodosItems();
             if (items.length === 0) {
