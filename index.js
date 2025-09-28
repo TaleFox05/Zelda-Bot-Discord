@@ -774,19 +774,19 @@ client.on('messageCreate', async message => {
     // --- COMANDO: QUITAR RUPIAS (Pruebas) ---
     if (command === 'quitarrupias') {
         try {
-            const cantidadMatch = fullCommand.match(/^(\d+)/);
-            const regex = /"([^"]+)"/;
-            const match = fullCommand.match(regex);
+            const regex = /"([^"]+)"/g;
+            const matches = [...fullCommand.matchAll(regex)];
 
-            if (!cantidadMatch || !match) {
-                return message.reply('Uso: `!Zquitarrupias cantidad "Nombre del Personaje"` (ejemplo: `!Zquitarrupias 5 "Link"`)');
+            if (matches.length !== 2) {
+                return message.reply('Uso: `!Zquitarrupias "cantidad" "Nombre del Personaje"` (ejemplo: `!Zquitarrupias "5" "Link"`)');
             }
 
-            const cantidad = parseInt(cantidadMatch[1]);
-            const nombrePj = match[1];
+            const cantidadStr = matches[0][1];
+            const nombrePj = matches[1][1];
+            const cantidad = parseInt(cantidadStr);
 
-            if (cantidad <= 0) {
-                return message.reply('La cantidad debe ser un número entero positivo.');
+            if (isNaN(cantidad) || cantidad <= 0) {
+                return message.reply('La cantidad debe ser un número entero positivo entre comillas.');
             }
 
             console.log(`Buscando personaje: ${nombrePj} para quitar ${cantidad} Rupias`);
